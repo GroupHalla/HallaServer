@@ -10,6 +10,9 @@
 #include <QDateTime>
 #include <QDir>
 #include <QCryptographicHash>
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QSqlError>
 
 ServerCore::ServerCore(QObject* parent) : QObject(parent) {
     m_nextToken = 1024;
@@ -125,6 +128,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     c->setGroup(m_groups[groupId].name);
     c->setSigla(m_groups[groupId].sigla);
     c->setIcon(m_groups[groupId].icon);
+    c->setGroupOrder(m_groups[groupId].order);
     if (announce) {
         QJsonObject m = HProto::msg("user_group");
         m["id"] = c->id();
@@ -132,6 +136,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         m["gid"] = groupId;
         m["sigla"] = m_groups[groupId].sigla;
         m["icon"] = m_groups[groupId].icon;
+        m["order"] = m_groups[groupId].order;
         broadcast(m);
     }
 }
@@ -146,12 +151,218 @@ void ServerCore::broadcastGroups() {
 
 // ==================================================================== dados
 void ServerCore::loadData() {
-    // canal padrão sempre existe
+    m_channels.clear();
+    m_groups.clear();
+    setupBuiltinGroups();
+
     SvrChan def{1, 0, QStringLiteral("Canal padrão"), QString(), QString(), QString(),
                 true, false, 0, 2, 4, 6, -1, {}};
     m_channels.insert(1, def);
     m_nextChanId = 2;
 
+    if (!initDatabase()) {
+        log("Erro grave: Não foi possível inicializar o banco de dados SQLite!");
+        return;
+    }
+
+    QSqlDatabase db = QSqlDatabase::database("HallaServerConnection");
+    if (!db.isOpen()) return;
+
+    QSqlQuery q(db);
+    
+    bool dbHasData = false;
+    if (q.exec("SELECT COUNT(*) FROM settings") && q.next()) {
+        if (q.value(0).toInt() > 0) {
+            dbHasData = true;
+        }
+    }
+    
+    if (!dbHasData && !m_dataFile.isEmpty() && QFile::exists(m_dataFile)) {
+        log("Detectados arquivos JSON antigos. Iniciando migração automática para SQLite...");
+        loadDataFromJson();
+        if (QFile::exists(m_banFile)) {
+            loadBansFromJson();
+        }
+        saveDataToSql();
+        saveBansToSql();
+        
+        QFile::rename(m_dataFile, m_dataFile + ".bak");
+        if (QFile::exists(m_banFile)) {
+            QFile::rename(m_banFile, m_banFile + ".bak");
+        }
+        log("Migração para SQLite concluída com sucesso! Arquivos .json renomeados para .json.bak");
+        return;
+    }
+
+    if (dbHasData) {
+        if (q.exec("SELECT key, value FROM settings")) {
+            while (q.next()) {
+                QString key = q.value(0).toString();
+                QString val = q.value(1).toString();
+                if (key == "name") m_name = val;
+                else if (key == "motd") m_motd = val;
+                else if (key == "queryPass") m_queryPass = val;
+            }
+        }
+
+        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk FROM channels")) {
+            while (q.next()) {
+                SvrChan c;
+                c.id = q.value(0).toInt();
+                c.parent = q.value(1).toInt();
+                c.name = q.value(2).toString();
+                c.topic = q.value(3).toString();
+                c.desc = q.value(4).toString();
+                c.password = q.value(5).toString();
+                c.def = q.value(6).toInt() != 0;
+                c.type = q.value(7).toInt();
+                c.moderated = q.value(8).toInt() != 0;
+                c.codec = q.value(9).toInt();
+                c.quality = q.value(10).toInt();
+                c.maxClients = q.value(11).toInt();
+                c.ntalk = q.value(12).toInt();
+                
+                if (c.id == 1) {
+                    m_channels[1] = c;
+                } else {
+                    m_channels.insert(c.id, c);
+                }
+                m_nextChanId = qMax(m_nextChanId, c.id + 1);
+            }
+        }
+
+        if (q.exec("SELECT id, name, sigla, order_index, icon, perms FROM groups")) {
+            while (q.next()) {
+                GroupDef g;
+                g.id = q.value(0).toInt();
+                g.name = q.value(1).toString();
+                g.sigla = q.value(2).toString();
+                g.order = q.value(3).toInt();
+                g.icon = q.value(4).toString();
+                
+                QJsonDocument doc = QJsonDocument::fromJson(q.value(5).toString().toUtf8());
+                g.perms = doc.object();
+                
+                if (g.id >= 100) {
+                    m_groups[g.id] = g;
+                    m_nextGroupId = qMax(m_nextGroupId, g.id + 1);
+                } else {
+                    // Atualiza campos de sigla, order e icon nos grupos built-in carregados
+                    if (m_groups.contains(g.id)) {
+                        m_groups[g.id].sigla = g.sigla;
+                        m_groups[g.id].order = g.order;
+                        m_groups[g.id].icon = g.icon;
+                    }
+                }
+            }
+        }
+
+        if (q.exec("SELECT uid, groupId FROM assignments")) {
+            while (q.next()) {
+                m_assignByUid[q.value(0).toString()] = q.value(1).toInt();
+            }
+        }
+
+        if (q.exec("SELECT key_val FROM used_keys")) {
+            while (q.next()) {
+                m_usedKeys.insert(q.value(0).toString());
+            }
+        }
+
+        if (q.exec("SELECT uid, name, firstSeen, lastSeen FROM clients")) {
+            while (q.next()) {
+                RegClient rc;
+                rc.name = q.value(1).toString();
+                rc.firstSeen = QDateTime::fromString(q.value(2).toString(), Qt::ISODate);
+                rc.lastSeen = QDateTime::fromString(q.value(3).toString(), Qt::ISODate);
+                m_registry[q.value(0).toString()] = rc;
+            }
+        }
+
+        m_complaints.clear();
+        if (q.exec("SELECT uid, name, byUid, byName, text, ts FROM complaints")) {
+            while (q.next()) {
+                Complaint cp;
+                cp.uid = q.value(0).toString();
+                cp.name = q.value(1).toString();
+                cp.byUid = q.value(2).toString();
+                cp.byName = q.value(3).toString();
+                cp.text = q.value(4).toString();
+                cp.ts = QDateTime::fromString(q.value(5).toString(), Qt::ISODate);
+                m_complaints << cp;
+            }
+        }
+
+        m_offline.clear();
+        if (q.exec("SELECT targetUid, fromUid, fromName, text, ts FROM offline_messages")) {
+            while (q.next()) {
+                OfflineMsg om;
+                QString targetUid = q.value(0).toString();
+                om.fromUid = q.value(1).toString();
+                om.fromName = q.value(2).toString();
+                om.text = q.value(3).toString();
+                om.ts = QDateTime::fromString(q.value(4).toString(), Qt::ISODate);
+                m_offline[targetUid] << om;
+            }
+        }
+
+        m_files.clear();
+        if (q.exec("SELECT chanId, name, byUid, byName, size, ts FROM files")) {
+            while (q.next()) {
+                FileMeta fm;
+                fm.chan = q.value(0).toInt();
+                fm.name = q.value(1).toString();
+                fm.byUid = q.value(2).toString();
+                fm.by = q.value(3).toString();
+                fm.size = q.value(4).toLongLong();
+                fm.ts = QDateTime::fromString(q.value(5).toString(), Qt::ISODate);
+                m_files << fm;
+            }
+        }
+    }
+    
+    log(QStringLiteral("Dados carregados do SQLite: %1 canais, %2 grupos, %3 identidades")
+            .arg(m_channels.size()).arg(m_groups.size()).arg(m_registry.size()));
+}
+
+bool ServerCore::initDatabase() {
+    if (m_dbFile.isEmpty()) return false;
+    
+    QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", "HallaServerConnection");
+    db.setDatabaseName(m_dbFile);
+    if (!db.open()) {
+        log(QStringLiteral("Erro ao abrir banco de dados SQLite: %1").arg(db.lastError().text()));
+        return false;
+    }
+    
+    QSqlQuery q(db);
+    q.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)");
+    q.exec("CREATE TABLE IF NOT EXISTS channels ("
+           "id INTEGER PRIMARY KEY, parentId INTEGER, name TEXT, topic TEXT, desc TEXT, "
+           "password TEXT, isDefault INTEGER, type INTEGER, moderated INTEGER, "
+           "codec INTEGER, codecQuality INTEGER, maxClients INTEGER, ntalk INTEGER"
+           ")");
+    q.exec("CREATE TABLE IF NOT EXISTS groups ("
+           "id INTEGER PRIMARY KEY, name TEXT, sigla TEXT, order_index INTEGER, icon TEXT, perms TEXT"
+           ")");
+    q.exec("CREATE TABLE IF NOT EXISTS assignments (uid TEXT PRIMARY KEY, groupId INTEGER)");
+    q.exec("CREATE TABLE IF NOT EXISTS used_keys (key_val TEXT PRIMARY KEY)");
+    q.exec("CREATE TABLE IF NOT EXISTS clients (uid TEXT PRIMARY KEY, name TEXT, firstSeen TEXT, lastSeen TEXT)");
+    q.exec("CREATE TABLE IF NOT EXISTS complaints ("
+           "id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT, name TEXT, byUid TEXT, byName TEXT, text TEXT, ts TEXT"
+           ")");
+    q.exec("CREATE TABLE IF NOT EXISTS offline_messages ("
+           "id INTEGER PRIMARY KEY AUTOINCREMENT, targetUid TEXT, fromUid TEXT, fromName TEXT, text TEXT, ts TEXT"
+           ")");
+    q.exec("CREATE TABLE IF NOT EXISTS files ("
+           "id INTEGER PRIMARY KEY AUTOINCREMENT, chanId INTEGER, name TEXT, byUid TEXT, byName TEXT, size INTEGER, ts TEXT"
+           ")");
+    q.exec("CREATE TABLE IF NOT EXISTS bans (uid TEXT, ip TEXT, name TEXT, reason TEXT, expires TEXT, PRIMARY KEY (uid, ip))");
+    
+    return true;
+}
+
+void ServerCore::loadDataFromJson() {
     if (m_dataFile.isEmpty()) return;
     QFile f(m_dataFile);
     if (!f.open(QIODevice::ReadOnly)) return;
@@ -162,13 +373,12 @@ void ServerCore::loadData() {
     QJsonArray chans = root["channels"].toArray();
     for (const QJsonValue& v : chans) {
         SvrChan c = chanFromJson(v.toObject());
-        if (c.id == 1) { // mescla o padrão mantendo id 1
-            def.name = c.name; def.topic = c.topic; def.desc = c.desc;
-            def.password = c.password; def.def = true; def.moderated = c.moderated;
-            def.ntalk = c.ntalk;
-            def.type = 2; def.codec = c.codec; def.quality = c.quality;
-            def.maxClients = c.maxClients;
-            m_channels[1] = def;
+        if (c.id == 1) {
+            m_channels[1].name = c.name; m_channels[1].topic = c.topic; m_channels[1].desc = c.desc;
+            m_channels[1].password = c.password; m_channels[1].def = true; m_channels[1].moderated = c.moderated;
+            m_channels[1].ntalk = c.ntalk;
+            m_channels[1].type = 2; m_channels[1].codec = c.codec; m_channels[1].quality = c.quality;
+            m_channels[1].maxClients = c.maxClients;
             continue;
         }
         m_channels.insert(c.id, c);
@@ -177,7 +387,6 @@ void ServerCore::loadData() {
     if (root.contains("name")) m_name = root["name"].toString();
     if (root.contains("motd")) m_motd = root["motd"].toString();
 
-    // grupos customizados (ids >= 100; builtin sempre reconstruídos do código)
     for (const QJsonValue& v : root["groups"].toArray()) {
         const QJsonObject o = v.toObject();
         GroupDef g;
@@ -190,16 +399,17 @@ void ServerCore::loadData() {
         if (g.id >= 100 && !g.name.isEmpty()) {
             m_groups[g.id] = g;
             m_nextGroupId = qMax(m_nextGroupId, g.id + 1);
+        } else if (m_groups.contains(g.id)) {
+            m_groups[g.id].sigla = g.sigla;
+            m_groups[g.id].order = g.order;
+            m_groups[g.id].icon = g.icon;
         }
     }
-    // atribuições persistentes uid -> grupo
     const QJsonObject assign = root["assignments"].toObject();
     for (auto it = assign.begin(); it != assign.end(); ++it)
         m_assignByUid[it.key()] = it.value().toInt();
-    // chaves de privilégio já consumidas
     for (const QJsonValue& v : root["usedKeys"].toArray())
         m_usedKeys.insert(v.toString());
-    // registro de identidades
     const QJsonObject clients = root["clients"].toObject();
     for (auto it = clients.begin(); it != clients.end(); ++it) {
         const QJsonObject o = it.value().toObject();
@@ -209,9 +419,7 @@ void ServerCore::loadData() {
         rc.lastSeen = QDateTime::fromString(o["last"].toString(), Qt::ISODate);
         m_registry[it.key()] = rc;
     }
-    // ServerQuery: senha persistida (gerada na 1ª execução)
     m_queryPass = root["queryPass"].toString();
-    // v3: reclamações
     for (const QJsonValue& v : root["complaints"].toArray()) {
         const QJsonObject o = v.toObject();
         Complaint cp{o["uid"].toString(), o["name"].toString(), o["byUid"].toString(),
@@ -219,7 +427,6 @@ void ServerCore::loadData() {
                      QDateTime::fromString(o["ts"].toString(), Qt::ISODate)};
         m_complaints << cp;
     }
-    // v3: mensagens offline pendentes
     const QJsonObject off = root["offline"].toObject();
     for (auto it = off.begin(); it != off.end(); ++it) {
         for (const QJsonValue& v : it.value().toArray()) {
@@ -229,83 +436,15 @@ void ServerCore::loadData() {
                                               QDateTime::fromString(o["ts"].toString(), Qt::ISODate)};
         }
     }
-    // v3: metadados de arquivos
     for (const QJsonValue& v : root["files"].toArray()) {
         const QJsonObject o = v.toObject();
         m_files << FileMeta{o["chan"].toInt(), o["name"].toString(), o["byUid"].toString(),
                             o["by"].toString(), o["size"].toString().toLongLong(),
                             QDateTime::fromString(o["ts"].toString(), Qt::ISODate)};
     }
-    log(QStringLiteral("Dados carregados: %1 canais, %2 grupos, %3 identidades")
-            .arg(m_channels.size()).arg(m_groups.size()).arg(m_registry.size()));
 }
 
-void ServerCore::saveData() {
-    if (m_dataFile.isEmpty()) return;
-    QJsonArray chans;
-    for (const SvrChan& c : m_channels)
-        if (c.type != 0) // temporários não persistem
-            chans << chanToJson(c);
-    QJsonArray groups;
-    for (const GroupDef& g : m_groups)
-        if (g.id >= 100) groups << groupToJson(g); // builtin não precisa salvar
-    QJsonObject assign;
-    for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it)
-        assign[it.key()] = it.value();
-    QJsonArray used;
-    for (const QString& k : m_usedKeys) used << k;
-    QJsonObject clients;
-    for (auto it = m_registry.begin(); it != m_registry.end(); ++it) {
-        QJsonObject o;
-        o["name"] = it.value().name;
-        o["first"] = it.value().firstSeen.toString(Qt::ISODate);
-        o["last"] = it.value().lastSeen.toString(Qt::ISODate);
-        clients[it.key()] = o;
-    }
-    // v3: reclamações, offline, arquivos
-    QJsonArray complaints;
-    for (const Complaint& cp : m_complaints) {
-        QJsonObject o;
-        o["uid"] = cp.uid; o["name"] = cp.name; o["byUid"] = cp.byUid;
-        o["byName"] = cp.byName; o["text"] = cp.text; o["ts"] = cp.ts.toString(Qt::ISODate);
-        complaints << o;
-    }
-    QJsonObject offline;
-    for (auto it = m_offline.begin(); it != m_offline.end(); ++it) {
-        QJsonArray arr;
-        for (const OfflineMsg& om : it.value()) {
-            QJsonObject o;
-            o["fromUid"] = om.fromUid; o["from"] = om.fromName; o["text"] = om.text;
-            o["ts"] = om.ts.toString(Qt::ISODate);
-            arr << o;
-        }
-        if (!arr.isEmpty()) offline[it.key()] = arr;
-    }
-    QJsonArray files;
-    for (const FileMeta& fm : m_files) {
-        QJsonObject o;
-        o["chan"] = fm.chan; o["name"] = fm.name; o["byUid"] = fm.byUid; o["by"] = fm.by;
-        o["size"] = QString::number(fm.size); o["ts"] = fm.ts.toString(Qt::ISODate);
-        files << o;
-    }
-
-    QJsonObject root;
-    root["name"] = m_name;
-    root["motd"] = m_motd;
-    root["channels"] = chans;
-    root["groups"] = groups;
-    root["assignments"] = assign;
-    root["usedKeys"] = used;
-    root["clients"] = clients;
-    root["complaints"] = complaints;
-    root["offline"] = offline;
-    root["files"] = files;
-    if (!m_queryPass.isEmpty()) root["queryPass"] = m_queryPass;
-    QFile f(m_dataFile);
-    if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-}
-
-void ServerCore::loadBans() {
+void ServerCore::loadBansFromJson() {
     m_bans.clear();
     if (m_banFile.isEmpty()) return;
     QFile f(m_banFile);
@@ -325,19 +464,170 @@ void ServerCore::loadBans() {
     }
 }
 
-void ServerCore::saveBans() {
-    if (m_banFile.isEmpty()) return;
-    QJsonArray arr;
-    for (const BanEntry& b : m_bans) {
-        QJsonObject o;
-        o["uid"] = b.uid; o["ip"] = b.ip; o["name"] = b.name; o["reason"] = b.reason;
-        if (b.expires.isValid()) o["expires"] = b.expires.toString(Qt::ISODate);
-        arr << o;
-    }
-    QFile f(m_banFile);
-    if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(arr).toJson(QJsonDocument::Indented));
+void ServerCore::saveData() {
+    saveDataToSql();
 }
 
+void ServerCore::saveDataToSql() {
+    QSqlDatabase db = QSqlDatabase::database("HallaServerConnection");
+    if (!db.isOpen()) return;
+
+    db.transaction();
+    QSqlQuery q(db);
+
+    q.exec("DELETE FROM settings");
+    q.exec("DELETE FROM channels");
+    q.exec("DELETE FROM groups");
+    q.exec("DELETE FROM assignments");
+    q.exec("DELETE FROM used_keys");
+    q.exec("DELETE FROM clients");
+    q.exec("DELETE FROM complaints");
+    q.exec("DELETE FROM offline_messages");
+    q.exec("DELETE FROM files");
+
+    q.prepare("INSERT INTO settings (key, value) VALUES (:key, :value)");
+    q.bindValue(":key", "name"); q.bindValue(":value", m_name); q.exec();
+    q.bindValue(":key", "motd"); q.bindValue(":value", m_motd); q.exec();
+    if (!m_queryPass.isEmpty()) {
+        q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
+    }
+
+    q.prepare("INSERT INTO channels (id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk) "
+              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk)");
+    for (const SvrChan& c : m_channels) {
+        if (c.type == 0) continue;
+        q.bindValue(":id", c.id);
+        q.bindValue(":parentId", c.parent);
+        q.bindValue(":name", c.name);
+        q.bindValue(":topic", c.topic);
+        q.bindValue(":desc", c.desc);
+        q.bindValue(":password", c.password);
+        q.bindValue(":isDefault", c.def ? 1 : 0);
+        q.bindValue(":type", c.type);
+        q.bindValue(":moderated", c.moderated ? 1 : 0);
+        q.bindValue(":codec", c.codec);
+        q.bindValue(":codecQuality", c.quality);
+        q.bindValue(":maxClients", c.maxClients);
+        q.bindValue(":ntalk", c.ntalk);
+        q.exec();
+    }
+
+    q.prepare("INSERT INTO groups (id, name, sigla, order_index, icon, perms) "
+              "VALUES (:id, :name, :sigla, :order_index, :icon, :perms)");
+    for (const GroupDef& g : m_groups) {
+        q.bindValue(":id", g.id);
+        q.bindValue(":name", g.name);
+        q.bindValue(":sigla", g.sigla);
+        q.bindValue(":order_index", g.order);
+        q.bindValue(":icon", g.icon);
+        q.bindValue(":perms", QString::fromUtf8(QJsonDocument(g.perms).toJson(QJsonDocument::Compact)));
+        q.exec();
+    }
+
+    q.prepare("INSERT INTO assignments (uid, groupId) VALUES (:uid, :groupId)");
+    for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it) {
+        q.bindValue(":uid", it.key());
+        q.bindValue(":groupId", it.value());
+        q.exec();
+    }
+
+    q.prepare("INSERT INTO used_keys (key_val) VALUES (:key)");
+    for (const QString& k : m_usedKeys) {
+        q.bindValue(":key", k);
+        q.exec();
+    }
+
+    q.prepare("INSERT INTO clients (uid, name, firstSeen, lastSeen) VALUES (:uid, :name, :first, :last)");
+    for (auto it = m_registry.begin(); it != m_registry.end(); ++it) {
+        q.bindValue(":uid", it.key());
+        q.bindValue(":name", it.value().name);
+        q.bindValue(":first", it.value().firstSeen.toString(Qt::ISODate));
+        q.bindValue(":last", it.value().lastSeen.toString(Qt::ISODate));
+        q.exec();
+    }
+
+    q.prepare("INSERT INTO complaints (uid, name, byUid, byName, text, ts) VALUES (:uid, :name, :byUid, :byName, :text, :ts)");
+    for (const Complaint& cp : m_complaints) {
+        q.bindValue(":uid", cp.uid);
+        q.bindValue(":name", cp.name);
+        q.bindValue(":byUid", cp.byUid);
+        q.bindValue(":byName", cp.byName);
+        q.bindValue(":text", cp.text);
+        q.bindValue(":ts", cp.ts.toString(Qt::ISODate));
+        q.exec();
+    }
+
+    q.prepare("INSERT INTO offline_messages (targetUid, fromUid, fromName, text, ts) VALUES (:targetUid, :fromUid, :fromName, :text, :ts)");
+    for (auto it = m_offline.begin(); it != m_offline.end(); ++it) {
+        for (const OfflineMsg& om : it.value()) {
+            q.bindValue(":targetUid", it.key());
+            q.bindValue(":fromUid", om.fromUid);
+            q.bindValue(":fromName", om.fromName);
+            q.bindValue(":text", om.text);
+            q.bindValue(":ts", om.ts.toString(Qt::ISODate));
+            q.exec();
+        }
+    }
+
+    q.prepare("INSERT INTO files (chanId, name, byUid, byName, size, ts) VALUES (:chanId, :name, :byUid, :byName, :size, :ts)");
+    for (const FileMeta& fm : m_files) {
+        q.bindValue(":chanId", fm.chan);
+        q.bindValue(":name", fm.name);
+        q.bindValue(":byUid", fm.byUid);
+        q.bindValue(":byName", fm.by);
+        q.bindValue(":size", fm.size);
+        q.bindValue(":ts", fm.ts.toString(Qt::ISODate));
+        q.exec();
+    }
+
+    db.commit();
+}
+
+void ServerCore::loadBans() {
+    m_bans.clear();
+    
+    QSqlDatabase db = QSqlDatabase::database("HallaServerConnection");
+    if (!db.isOpen()) return;
+
+    QSqlQuery q(db);
+    if (q.exec("SELECT uid, ip, name, reason, expires FROM bans")) {
+        while (q.next()) {
+            BanEntry b;
+            b.uid = q.value(0).toString();
+            b.ip = q.value(1).toString();
+            b.name = q.value(2).toString();
+            b.reason = q.value(3).toString();
+            QString exp = q.value(4).toString();
+            if (!exp.isEmpty()) {
+                b.expires = QDateTime::fromString(exp, Qt::ISODate);
+            }
+            m_bans << b;
+        }
+    }
+}
+
+void ServerCore::saveBans() {
+    saveBansToSql();
+}
+
+void ServerCore::saveBansToSql() {
+    QSqlDatabase db = QSqlDatabase::database("HallaServerConnection");
+    if (!db.isOpen()) return;
+
+    db.transaction();
+    QSqlQuery q(db);
+    q.exec("DELETE FROM bans");
+    q.prepare("INSERT INTO bans (uid, ip, name, reason, expires) VALUES (:uid, :ip, :name, :reason, :expires)");
+    for (const BanEntry& b : m_bans) {
+        q.bindValue(":uid", b.uid);
+        q.bindValue(":ip", b.ip);
+        q.bindValue(":name", b.name);
+        q.bindValue(":reason", b.reason);
+        q.bindValue(":expires", b.expires.isValid() ? b.expires.toString(Qt::ISODate) : QString());
+        q.exec();
+    }
+    db.commit();
+}
 void ServerCore::setPrivilegeKeys(const QStringList& keys) {
     m_privKeyGroup.clear();
     for (QString k : keys) {

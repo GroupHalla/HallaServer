@@ -77,6 +77,7 @@ public:
     void setPrivilegeKeyReuse(bool on)      { m_privKeyReuse = on; }
     void setDataFile(const QString& f)      { m_dataFile = f; }
     void setBanFile(const QString& f)       { m_banFile = f; }
+    void setDatabaseFile(const QString& f)  { m_dbFile = f; }
     void setVersion(const QString& v)       { m_version = v; }
 
     void log(const QString& msg);
@@ -133,6 +134,7 @@ private:
     bool m_privKeyReuse = false;
     QString m_dataFile;
     QString m_banFile;
+    QString m_dbFile;
 
     QMap<int, ClientSession*> m_clients;
     QMap<quint32, ClientSession*> m_byVoiceToken;
@@ -170,6 +172,11 @@ private:
     QString avatarPath(const QString& uid) const;
     QString filesDir(int chan) const;
     void loadAvatars();
+    bool initDatabase();
+    void loadDataFromJson();
+    void loadBansFromJson();
+    void saveDataToSql();
+    void saveBansToSql();
     bool isChanOp(const ClientSession* c, int channelId) const;
     static QString sanitizeFileName(const QString& n);
     void removeChannelFiles(int chan);

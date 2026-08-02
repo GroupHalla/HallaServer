@@ -27,6 +27,7 @@ public:
     int groupId() const { return m_groupId; }
     QString sigla() const { return m_sigla; }
     QString icon() const { return m_icon; }
+    int groupOrder() const { return m_groupOrder; }
     QHostAddress ip() const;
 
     bool micMuted() const { return m_micMuted; }
@@ -54,6 +55,7 @@ public:
     void setGroupId(int g)                  { m_groupId = g; }
     void setSigla(const QString& s)         { m_sigla = s; }
     void setIcon(const QString& i)          { m_icon = i; }
+    void setGroupOrder(int o)               { m_groupOrder = o; }
     void setMicMuted(bool v)                { m_micMuted = v; }
     void setSpkMuted(bool v)                { m_spkMuted = v; }
     void setAway(bool v)                    { m_away = v; }
@@ -98,6 +100,7 @@ private:
     int m_groupId = 2;
     QString m_sigla;
     QString m_icon;
+    int m_groupOrder = 0;
     bool m_micMuted = false;
     bool m_spkMuted = false;
     bool m_away = false;

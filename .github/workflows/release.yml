@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.1-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.2-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.1-win64.zip
+          path: halla-server-3.2.2-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -112,13 +112,13 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.1-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-3.2.2-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.1-linux-x64.tar.gz
+          path: halla-server-3.2.2-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -138,26 +138,24 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.1
-          name: Halla Server 3.2.1 — Cargos e Resolvedor de Dependências
+          tag_name: v3.2.2
+          name: Halla Server 3.2.2 — Banco de Dados Relacional SQLite
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.1-win64.zip
-            halla-server-3.2.1-linux-x64.tar.gz
+            halla-server-3.2.2-win64.zip
+            halla-server-3.2.2-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.1
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.2
 
-            Esta release traz a correção definitiva de DLLs ausentes no Windows, além das atualizações estruturais de sincronia de cargos/grupos para acompanhar o lançamento do cliente Halla v3.13.12!
+            Esta release traz o novíssimo motor de persistência relacional integrado em SQLite, além da sincronia avançada de ordenação de cargos e suporte a múltiplos cargos!
 
-            ### 🩹 Correção Definitiva de DLLs Ausentes no Windows
-            * **Resolvedor Recursivo de DLLs:** Implementamos o mesmo resolvedor recursivo de dependências baseado em `ldd` do cliente. Ele analisa ciclicamente todas as DLLs e dependências de terceiros copiadas, garantindo que `libbrotlidec.dll`, `zlib1.dll`, `libb2-1.dll`, `libicuin78.dll` e demais arquivos do sistema de pacotes do MSYS2 sejam **100% incluídos no pacote de lançamento de forma autônoma**!
+            ### 💾 Transição para Banco de Dados Relacional SQLite
+            * **Adeus arquivos JSON simples:** O Halla Server agora utiliza um banco de dados relacional **SQLite nativo** (`halla-data.db`), garantindo maior performance, integridade referencial dos dados e estabilidade em servidores com grande volume de usuários.
+            * **Migração 100% Automática:** Servidores antigos que possuam os arquivos `halla-data.json` e `halla-bans.json` serão migrados de forma totalmente silenciosa e automática para o banco SQLite na primeira inicialização!
 
-            ### 🏷️ Suporte a Metadados de Grupos e Cargos (Sigla, Order, Icon)
-            * **Sincronia Completa de Cargos:** Expandimos a estrutura `GroupDef` no banco de dados e protocolo. O servidor agora transmite as propriedades `sigla` (ex: `[Mod]`), `order` (ordem de classificação hierárquica) e `icon` diretamente para os clientes conectados.
-            * **Exibição Hierárquica:** O cliente Halla agora renderiza essas siglas automaticamente antes do apelido dos membros (ex: `[Mod] Farley Barbosa`) para identificação imediata da equipe do servidor!
-
-            ### 🧹 Limpeza Geral de Marcas e Nomes de Terceiros
-            * **Identidade Exclusiva:** Realizamos uma varredura rigorosa em todos os fontes do servidor (`ServerQuery`, `ServerV3`, `main.cpp`), protocolos e documentações, eliminando qualquer menção ou sigla a softwares de terceiros. O Halla Server agora se apresenta com identidade visual e textual limpa, original e completamente independente!
+            ### 🏷️ Ordenação Hierárquica e Ícones de Cargos (Item 11 e Item 9)
+            * **Ordem de Cargos:** O servidor transmite perfeitamente a propriedade `order` para classificar os membros de canais na árvore do cliente (ex: administradores no topo, moderadores abaixo, etc.).
+            * **Múltiplos Ícones em Cargos:** O cliente Halla agora renderiza múltiplos distintivos coloridos ou emojis diretamente no final do apelido do usuário na lista de conectados para representar todos os cargos dele!
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
