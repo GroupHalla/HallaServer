@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
 
     if (!core.start(port, port)) return 1;
 
-    // ---- ServerQuery (administração remota em texto, estilo TS3)
+    // ---- ServerQuery (administração remota em texto, estilo Halla)
     cfg.beginGroup("query");
     const quint16 queryPort = quint16(cfg.value("port", 10011).toUInt());
     const QString queryUser = cfg.value("user", "serveradmin").toString();

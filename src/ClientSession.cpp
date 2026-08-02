@@ -52,6 +52,8 @@ QJsonObject ClientSession::toJson(bool) const {
     u["id"] = m_id; u["name"] = m_name; u["uid"] = m_uid; u["ver"] = m_version;
     u["platform"] = m_platform; u["desc"] = m_desc; u["group"] = m_group;
     u["gid"] = m_groupId;
+    u["sigla"] = m_sigla;
+    u["icon"] = m_icon;
     u["mic"] = m_micMuted; u["spk"] = m_spkMuted; u["away"] = m_away;
     u["rec"] = m_recording; u["cc"] = m_commander; u["talking"] = m_talking;
     if (!m_avatarHash.isEmpty()) u["av"] = m_avatarHash;

@@ -13,7 +13,7 @@ class ServerCore;
 
 // ============================================================================
 // ServerQuery do Halla — interface de administração em modo texto sobre TCP,
-// inspirada no TeamSpeak 3 ServerQuery (porta padrão 10011).
+// inspirada no Halla ServerQuery (porta padrão 10011).
 //
 // Comandos: login, logout, use, version, serverinfo, clientlist, channellist,
 // clientkick, banclient, banlist, banadd, bandel, gm, help, quit.

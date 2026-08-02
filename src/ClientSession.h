@@ -25,6 +25,8 @@ public:
     QString description() const { return m_desc; }
     QString group() const { return m_group; }
     int groupId() const { return m_groupId; }
+    QString sigla() const { return m_sigla; }
+    QString icon() const { return m_icon; }
     QHostAddress ip() const;
 
     bool micMuted() const { return m_micMuted; }
@@ -50,6 +52,8 @@ public:
     void setPlatform(const QString& p)      { m_platform = p; }
     void setGroup(const QString& g)         { m_group = g; }
     void setGroupId(int g)                  { m_groupId = g; }
+    void setSigla(const QString& s)         { m_sigla = s; }
+    void setIcon(const QString& i)          { m_icon = i; }
     void setMicMuted(bool v)                { m_micMuted = v; }
     void setSpkMuted(bool v)                { m_spkMuted = v; }
     void setAway(bool v)                    { m_away = v; }
@@ -92,6 +96,8 @@ private:
     QString m_desc;
     QString m_group = "normal";
     int m_groupId = 2;
+    QString m_sigla;
+    QString m_icon;
     bool m_micMuted = false;
     bool m_spkMuted = false;
     bool m_away = false;

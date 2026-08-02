@@ -42,6 +42,9 @@ struct BanEntry {
 struct GroupDef {
     int id = 0;
     QString name;
+    QString sigla; // tag/abbreviation, e.g. "[Mod]"
+    int order = 0; // sorting index/hierarchy order
+    QString icon;  // icon identifier or index
     QJsonObject perms; // { "*":true } = tudo; chaves: kick, ban, banList, move,
                        // chanCreateTemp, chanCreateSemi, chanCreatePerm, chanEdit,
                        // chanDelete, serverEdit, groupEdit, poke, privmsg,

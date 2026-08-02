@@ -292,7 +292,7 @@ calle (`talking=off`).
 
 # ServerQuery (v3.1) — administração em texto
 
-Interface TCP em modo texto inspirada no TeamSpeak 3 ServerQuery
+Interface TCP em modo texto inspirada no Halla ServerQuery
 (porta padrão `10011`, configurável em `[query]` do ini; `0` = desligada).
 Comandos `chave=valor`, uma linha por resposta; cada resposta termina com
 `error id=0 msg=ok` (ou o código do erro) seguido de `\n\r`.
@@ -317,5 +317,5 @@ banlist | bandel banid=<uid>
 gm msg=<texto>          -> mensagem global (chat do servidor, "ServerQuery (admin)")
 help | version | logout | quit
 ```
-Códigos de erro TS3-like: `1538` (login inválido), `512` (não encontrado),
+Códigos de erro Halla-like: `1538` (login inválido), `512` (não encontrado),
 `256` (comando desconhecido), `2568` (não autenticado).

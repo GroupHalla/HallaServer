@@ -140,7 +140,7 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
     QJsonObject m = HProto::msg("whisper_ok");
     m["count"] = ids.size();
     c->send(m);
-    // avisa estilo TS3 no próprio cliente (UI local mostra o modo)
+    // avisa estilo Halla no próprio cliente (UI local mostra o modo)
 }
 
 // ============================================================== ARQUIVOS (v3)

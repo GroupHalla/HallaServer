@@ -113,6 +113,9 @@ QJsonObject ServerCore::groupToJson(const GroupDef& g) const {
     o["id"] = g.id;
     o["name"] = g.name;
     o["perms"] = g.perms;
+    o["sigla"] = g.sigla;
+    o["order"] = g.order;
+    o["icon"] = g.icon;
     return o;
 }
 
@@ -120,11 +123,15 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     if (!m_groups.contains(groupId)) groupId = 1;
     c->setGroupId(groupId);
     c->setGroup(m_groups[groupId].name);
+    c->setSigla(m_groups[groupId].sigla);
+    c->setIcon(m_groups[groupId].icon);
     if (announce) {
         QJsonObject m = HProto::msg("user_group");
         m["id"] = c->id();
         m["group"] = c->group();
         m["gid"] = groupId;
+        m["sigla"] = m_groups[groupId].sigla;
+        m["icon"] = m_groups[groupId].icon;
         broadcast(m);
     }
 }
@@ -177,6 +184,9 @@ void ServerCore::loadData() {
         g.id = o["id"].toInt();
         g.name = o["name"].toString();
         g.perms = o["perms"].toObject();
+        g.sigla = o["sigla"].toString();
+        g.order = o["order"].toInt(0);
+        g.icon = o["icon"].toString();
         if (g.id >= 100 && !g.name.isEmpty()) {
             m_groups[g.id] = g;
             m_nextGroupId = qMax(m_nextGroupId, g.id + 1);

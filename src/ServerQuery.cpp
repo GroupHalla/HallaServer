@@ -20,7 +20,7 @@ bool ServerQuery::start(quint16 port) {
     if (port == 0) return true; // desligado
 
     if (m_pass.isEmpty()) {
-        // estilo TS3: primeira execução gera uma senha e a mostra no log
+        // estilo Halla: primeira execução gera uma senha e a mostra no log
         const QString chars = QStringLiteral("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789");
         QString pw;
         for (int i = 0; i < 12; ++i)

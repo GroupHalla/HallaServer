@@ -1,7 +1,7 @@
 # Halla Server
 
 Servidor de voz e chat auto-hospedável da família Halla — seu próprio
-"TeamSpeak", com protocolo aberto e documentado
+"Halla", com protocolo aberto e documentado
 ([PROTOCOL.md](PROTOCOL.md)).
 
 - **Voz real por UDP** com relay Opus de baixíssima latência (o servidor nunca
@@ -35,13 +35,13 @@ Servidor de voz e chat auto-hospedável da família Halla — seu próprio
 - **Reclamações** (v3): usuários registram queixas sobre outros; admins
   listam e limpam via protocolo
 - **Operadores de canal** (v3): quem cria um canal gerencia o próprio canal
-  (editar e expulsar dele) — o "channel admin" do TeamSpeak
+  (editar e expulsar dele) — o "channel admin" do Halla
 - **Sussurro** (v3): o cliente direciona a própria voz a uma lista de
   usuários, independente dos canais
 - **Transferência de arquivos por canal** (v3): upload/download/exclusão de
   arquivos por canal, persistidos no disco do servidor
 - **ServerQuery** (v3.1): administração remota em modo texto (estilo
-  TeamSpeak 3 ServerQuery) na porta 10011 — `login`, `serverinfo`,
+  Halla ServerQuery) na porta 10011 — `login`, `serverinfo`,
   `clientlist`, `channellist`, `clientkick`, `banclient`/`banadd`/`banlist`/
   `bandel` e `gm` (mensagem global). Senha gerada na 1ª execução
 - **Multi-plataforma**: Linux e Windows (64-bit)
