@@ -78,6 +78,12 @@ public:
     void setDataFile(const QString& f)      { m_dataFile = f; }
     void setBanFile(const QString& f)       { m_banFile = f; }
     void setDatabaseFile(const QString& f)  { m_dbFile = f; }
+    void setDatabaseType(const QString& t)  { m_dbType = t; }
+    void setDatabaseHost(const QString& h)  { m_dbHost = h; }
+    void setDatabasePort(int p)             { m_dbPort = p; }
+    void setDatabaseName(const QString& n)  { m_dbName = n; }
+    void setDatabaseUser(const QString& u)  { m_dbUser = u; }
+    void setDatabasePassword(const QString& p) { m_dbPassword = p; }
     void setVersion(const QString& v)       { m_version = v; }
 
     void log(const QString& msg);
@@ -135,6 +141,12 @@ private:
     QString m_dataFile;
     QString m_banFile;
     QString m_dbFile;
+    QString m_dbType = "sqlite";
+    QString m_dbHost = "localhost";
+    int m_dbPort = 3306;
+    QString m_dbName = "halla_db";
+    QString m_dbUser = "root";
+    QString m_dbPassword;
 
     QMap<int, ClientSession*> m_clients;
     QMap<quint32, ClientSession*> m_byVoiceToken;
@@ -170,6 +182,7 @@ private:
 
     QString dataDir() const;                        // diretório do dataFile
     QString avatarPath(const QString& uid) const;
+    QString iconPath(const QString& name) const;
     QString filesDir(int chan) const;
     void loadAvatars();
     bool initDatabase();
@@ -212,6 +225,7 @@ private:
     // ---- v3
     void handleAvatarSet(ClientSession* c, const QJsonObject& obj);
     void handleAvatarGet(ClientSession* c, const QJsonObject& obj);
+    void handleIconGet(ClientSession* c, const QJsonObject& obj);
     void handleOfflineSend(ClientSession* c, const QJsonObject& obj);
     void handleComplaintAdd(ClientSession* c, const QJsonObject& obj);
     void handleComplaintList(ClientSession* c);

@@ -56,6 +56,19 @@ void ServerCore::handleAvatarGet(ClientSession* c, const QJsonObject& obj) {
     c->send(m);
 }
 
+void ServerCore::handleIconGet(ClientSession* c, const QJsonObject& obj) {
+    const QString name = obj["name"].toString();
+    QFile f(iconPath(name));
+    if (!f.open(QIODevice::ReadOnly)) {
+        sendError(c, "not_found", "Ícone não encontrado");
+        return;
+    }
+    QJsonObject m = HProto::msg("icon_data");
+    m["name"] = name;
+    m["data"] = QString::fromLatin1(f.readAll().toBase64());
+    c->send(m);
+}
+
 // ===================================================== MENSAGENS OFFLINE (v3)
 void ServerCore::handleOfflineSend(ClientSession* c, const QJsonObject& obj) {
     const QString toUid = obj["uid"].toString();

@@ -69,6 +69,15 @@ int main(int argc, char* argv[]) {
     const bool privKeyReuse = cfg.value("privilegeKeyReuse", false).toBool();
     cfg.endGroup();
 
+    cfg.beginGroup("database");
+    const QString dbType = cfg.value("type", "sqlite").toString().toLower();
+    const QString dbHost = cfg.value("host", "localhost").toString();
+    const int dbPort = cfg.value("port", 3306).toInt();
+    const QString dbName = cfg.value("name", "halla_db").toString();
+    const QString dbUser = cfg.value("user", "root").toString();
+    const QString dbPassword = cfg.value("password", "").toString();
+    cfg.endGroup();
+
     const QString dir = QFileInfo(configPath).absolutePath();
 
     ServerCore core;
@@ -83,6 +92,12 @@ int main(int argc, char* argv[]) {
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
     core.setDatabaseFile(dir + "/halla-data.db");
+    core.setDatabaseType(dbType);
+    core.setDatabaseHost(dbHost);
+    core.setDatabasePort(dbPort);
+    core.setDatabaseName(dbName);
+    core.setDatabaseUser(dbUser);
+    core.setDatabasePassword(dbPassword);
 
     QTextStream out(stdout);
     QObject::connect(&core, &ServerCore::logLine, &app,

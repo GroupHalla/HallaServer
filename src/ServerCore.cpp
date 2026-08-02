@@ -326,38 +326,137 @@ void ServerCore::loadData() {
 }
 
 bool ServerCore::initDatabase() {
-    if (m_dbFile.isEmpty()) return false;
-    
-    QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", "HallaServerConnection");
-    db.setDatabaseName(m_dbFile);
+    QSqlDatabase db;
+    if (m_dbType == "mysql") {
+        db = QSqlDatabase::addDatabase("QMYSQL", "HallaServerConnection");
+        db.setHostName(m_dbHost);
+        db.setPort(m_dbPort);
+        db.setDatabaseName(m_dbName);
+        db.setUserName(m_dbUser);
+        db.setPassword(m_dbPassword);
+    } else {
+        db = QSqlDatabase::addDatabase("QSQLITE", "HallaServerConnection");
+        db.setDatabaseName(m_dbFile);
+    }
+
     if (!db.open()) {
-        log(QStringLiteral("Erro ao abrir banco de dados SQLite: %1").arg(db.lastError().text()));
+        log(QStringLiteral("Erro ao abrir banco de dados (%1): %2")
+            .arg(m_dbType, db.lastError().text()));
         return false;
     }
     
     QSqlQuery q(db);
-    q.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)");
+    
+    q.exec("CREATE TABLE IF NOT EXISTS settings ("
+           "`key` VARCHAR(255) PRIMARY KEY, "
+           "`value` TEXT"
+           ")");
+           
     q.exec("CREATE TABLE IF NOT EXISTS channels ("
-           "id INTEGER PRIMARY KEY, parentId INTEGER, name TEXT, topic TEXT, desc TEXT, "
-           "password TEXT, isDefault INTEGER, type INTEGER, moderated INTEGER, "
-           "codec INTEGER, codecQuality INTEGER, maxClients INTEGER, ntalk INTEGER"
+           "`id` INT PRIMARY KEY, "
+           "`parentId` INT, "
+           "`name` VARCHAR(255), "
+           "`topic` VARCHAR(255), "
+           "`desc` TEXT, "
+           "`password` VARCHAR(255), "
+           "`isDefault` INT, "
+           "`type` INT, "
+           "`moderated` INT, "
+           "`codec` INT, "
+           "`codecQuality` INT, "
+           "`maxClients` INT, "
+           "`ntalk` INT"
            ")");
+           
     q.exec("CREATE TABLE IF NOT EXISTS groups ("
-           "id INTEGER PRIMARY KEY, name TEXT, sigla TEXT, order_index INTEGER, icon TEXT, perms TEXT"
+           "`id` INT PRIMARY KEY, "
+           "`name` VARCHAR(255), "
+           "`sigla` VARCHAR(255), "
+           "`order_index` INT, "
+           "`icon` VARCHAR(255), "
+           "`perms` TEXT"
            ")");
-    q.exec("CREATE TABLE IF NOT EXISTS assignments (uid TEXT PRIMARY KEY, groupId INTEGER)");
-    q.exec("CREATE TABLE IF NOT EXISTS used_keys (key_val TEXT PRIMARY KEY)");
-    q.exec("CREATE TABLE IF NOT EXISTS clients (uid TEXT PRIMARY KEY, name TEXT, firstSeen TEXT, lastSeen TEXT)");
-    q.exec("CREATE TABLE IF NOT EXISTS complaints ("
-           "id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT, name TEXT, byUid TEXT, byName TEXT, text TEXT, ts TEXT"
+           
+    q.exec("CREATE TABLE IF NOT EXISTS assignments ("
+           "`uid` VARCHAR(255) PRIMARY KEY, "
+           "`groupId` INT"
            ")");
-    q.exec("CREATE TABLE IF NOT EXISTS offline_messages ("
-           "id INTEGER PRIMARY KEY AUTOINCREMENT, targetUid TEXT, fromUid TEXT, fromName TEXT, text TEXT, ts TEXT"
+           
+    q.exec("CREATE TABLE IF NOT EXISTS used_keys ("
+           "`key_val` VARCHAR(255) PRIMARY KEY"
            ")");
-    q.exec("CREATE TABLE IF NOT EXISTS files ("
-           "id INTEGER PRIMARY KEY AUTOINCREMENT, chanId INTEGER, name TEXT, byUid TEXT, byName TEXT, size INTEGER, ts TEXT"
+           
+    q.exec("CREATE TABLE IF NOT EXISTS clients ("
+           "`uid` VARCHAR(255) PRIMARY KEY, "
+           "`name` VARCHAR(255), "
+           "`firstSeen` VARCHAR(255), "
+           "`lastSeen` VARCHAR(255)"
            ")");
-    q.exec("CREATE TABLE IF NOT EXISTS bans (uid TEXT, ip TEXT, name TEXT, reason TEXT, expires TEXT, PRIMARY KEY (uid, ip))");
+           
+    q.exec("CREATE TABLE IF NOT EXISTS bans ("
+           "`uid` VARCHAR(255), "
+           "`ip` VARCHAR(255), "
+           "`name` VARCHAR(255), "
+           "`reason` TEXT, "
+           "`expires` VARCHAR(255), "
+           "PRIMARY KEY (`uid`, `ip`)"
+           ")");
+
+    if (m_dbType == "mysql") {
+        q.exec("CREATE TABLE IF NOT EXISTS complaints ("
+               "`id` INT AUTO_INCREMENT PRIMARY KEY, "
+               "`uid` VARCHAR(255), "
+               "`name` VARCHAR(255), "
+               "`byUid` VARCHAR(255), "
+               "`byName` VARCHAR(255), "
+               "`text` TEXT, "
+               "`ts` VARCHAR(255)"
+               ")");
+        q.exec("CREATE TABLE IF NOT EXISTS offline_messages ("
+               "`id` INT AUTO_INCREMENT PRIMARY KEY, "
+               "`targetUid` VARCHAR(255), "
+               "`fromUid` VARCHAR(255), "
+               "`fromName` VARCHAR(255), "
+               "`text` TEXT, "
+               "`ts` VARCHAR(255)"
+               ")");
+        q.exec("CREATE TABLE IF NOT EXISTS files ("
+               "`id` INT AUTO_INCREMENT PRIMARY KEY, "
+               "`chanId` INT, "
+               "`name` VARCHAR(255), "
+               "`byUid` VARCHAR(255), "
+               "`byName` VARCHAR(255), "
+               "`size` BIGINT, "
+               "`ts` VARCHAR(255)"
+               ")");
+    } else {
+        q.exec("CREATE TABLE IF NOT EXISTS complaints ("
+               "`id` INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "`uid` TEXT, "
+               "`name` TEXT, "
+               "`byUid` TEXT, "
+               "`byName` TEXT, "
+               "`text` TEXT, "
+               "`ts` TEXT"
+               ")");
+        q.exec("CREATE TABLE IF NOT EXISTS offline_messages ("
+               "`id` INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "`targetUid` TEXT, "
+               "`fromUid` TEXT, "
+               "`fromName` TEXT, "
+               "`text` TEXT, "
+               "`ts` TEXT"
+               ")");
+        q.exec("CREATE TABLE IF NOT EXISTS files ("
+               "`id` INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "`chanId` INTEGER, "
+               "`name` TEXT, "
+               "`byUid` TEXT, "
+               "`byName` TEXT, "
+               "`size` INTEGER, "
+               "`ts` TEXT"
+               ")");
+    }
     
     return true;
 }
@@ -485,14 +584,14 @@ void ServerCore::saveDataToSql() {
     q.exec("DELETE FROM offline_messages");
     q.exec("DELETE FROM files");
 
-    q.prepare("INSERT INTO settings (key, value) VALUES (:key, :value)");
+    q.prepare("INSERT INTO settings (`key`, `value`) VALUES (:key, :value)");
     q.bindValue(":key", "name"); q.bindValue(":value", m_name); q.exec();
     q.bindValue(":key", "motd"); q.bindValue(":value", m_motd); q.exec();
     if (!m_queryPass.isEmpty()) {
         q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
     }
 
-    q.prepare("INSERT INTO channels (id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk) "
+    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`) "
               "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk)");
     for (const SvrChan& c : m_channels) {
         if (c.type == 0) continue;
@@ -512,7 +611,7 @@ void ServerCore::saveDataToSql() {
         q.exec();
     }
 
-    q.prepare("INSERT INTO groups (id, name, sigla, order_index, icon, perms) "
+    q.prepare("INSERT INTO groups (`id`, `name`, `sigla`, `order_index`, `icon`, `perms`) "
               "VALUES (:id, :name, :sigla, :order_index, :icon, :perms)");
     for (const GroupDef& g : m_groups) {
         q.bindValue(":id", g.id);
@@ -524,20 +623,20 @@ void ServerCore::saveDataToSql() {
         q.exec();
     }
 
-    q.prepare("INSERT INTO assignments (uid, groupId) VALUES (:uid, :groupId)");
+    q.prepare("INSERT INTO assignments (`uid`, `groupId`) VALUES (:uid, :groupId)");
     for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it) {
         q.bindValue(":uid", it.key());
         q.bindValue(":groupId", it.value());
         q.exec();
     }
 
-    q.prepare("INSERT INTO used_keys (key_val) VALUES (:key)");
+    q.prepare("INSERT INTO used_keys (`key_val`) VALUES (:key)");
     for (const QString& k : m_usedKeys) {
         q.bindValue(":key", k);
         q.exec();
     }
 
-    q.prepare("INSERT INTO clients (uid, name, firstSeen, lastSeen) VALUES (:uid, :name, :first, :last)");
+    q.prepare("INSERT INTO clients (`uid`, `name`, `firstSeen`, `lastSeen`) VALUES (:uid, :name, :first, :last)");
     for (auto it = m_registry.begin(); it != m_registry.end(); ++it) {
         q.bindValue(":uid", it.key());
         q.bindValue(":name", it.value().name);
@@ -546,7 +645,7 @@ void ServerCore::saveDataToSql() {
         q.exec();
     }
 
-    q.prepare("INSERT INTO complaints (uid, name, byUid, byName, text, ts) VALUES (:uid, :name, :byUid, :byName, :text, :ts)");
+    q.prepare("INSERT INTO complaints (`uid`, `name`, `byUid`, `byName`, `text`, `ts`) VALUES (:uid, :name, :byUid, :byName, :text, :ts)");
     for (const Complaint& cp : m_complaints) {
         q.bindValue(":uid", cp.uid);
         q.bindValue(":name", cp.name);
@@ -557,7 +656,7 @@ void ServerCore::saveDataToSql() {
         q.exec();
     }
 
-    q.prepare("INSERT INTO offline_messages (targetUid, fromUid, fromName, text, ts) VALUES (:targetUid, :fromUid, :fromName, :text, :ts)");
+    q.prepare("INSERT INTO offline_messages (`targetUid`, `fromUid`, `fromName`, `text`, `ts`) VALUES (:targetUid, :fromUid, :fromName, :text, :ts)");
     for (auto it = m_offline.begin(); it != m_offline.end(); ++it) {
         for (const OfflineMsg& om : it.value()) {
             q.bindValue(":targetUid", it.key());
@@ -569,7 +668,7 @@ void ServerCore::saveDataToSql() {
         }
     }
 
-    q.prepare("INSERT INTO files (chanId, name, byUid, byName, size, ts) VALUES (:chanId, :name, :byUid, :byName, :size, :ts)");
+    q.prepare("INSERT INTO files (`chanId`, `name`, `byUid`, `byName`, `size`, `ts`) VALUES (:chanId, :name, :byUid, :byName, :size, :ts)");
     for (const FileMeta& fm : m_files) {
         q.bindValue(":chanId", fm.chan);
         q.bindValue(":name", fm.name);
@@ -617,7 +716,7 @@ void ServerCore::saveBansToSql() {
     db.transaction();
     QSqlQuery q(db);
     q.exec("DELETE FROM bans");
-    q.prepare("INSERT INTO bans (uid, ip, name, reason, expires) VALUES (:uid, :ip, :name, :reason, :expires)");
+    q.prepare("INSERT INTO bans (`uid`, `ip`, `name`, `reason`, `expires`) VALUES (:uid, :ip, :name, :reason, :expires)");
     for (const BanEntry& b : m_bans) {
         q.bindValue(":uid", b.uid);
         q.bindValue(":ip", b.ip);
@@ -732,6 +831,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "server_edit") handleServerEdit(c, obj);
     else if (t == "avatar_set")     handleAvatarSet(c, obj);
     else if (t == "avatar_get")     handleAvatarGet(c, obj);
+    else if (t == "icon_get")       handleIconGet(c, obj);
     else if (t == "offline_send")   handleOfflineSend(c, obj);
     else if (t == "complaint_add")  handleComplaintAdd(c, obj);
     else if (t == "complaint_list") handleComplaintList(c);
@@ -1510,6 +1610,11 @@ QString ServerCore::avatarPath(const QString& uid) const {
     QString safe = uid;
     safe.replace('/', '_').replace('+', '-');
     return dataDir() + QStringLiteral("/avatars/%1.avt").arg(safe);
+}
+
+QString ServerCore::iconPath(const QString& name) const {
+    QString safe = sanitizeFileName(name);
+    return dataDir() + QStringLiteral("/icons/%1").arg(safe);
 }
 
 QString ServerCore::filesDir(int chan) const {
