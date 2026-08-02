@@ -612,20 +612,27 @@ void ServerCore::saveData() {
 
 void ServerCore::saveDataToSql() {
     QSqlDatabase db = QSqlDatabase::database("HallaServerConnection");
-    if (!db.isOpen()) return;
+    if (!db.isOpen()) {
+        log("SQL SAVE ERROR: Database is not open!");
+        return;
+    }
 
     db.transaction();
     QSqlQuery q(db);
 
-    q.exec("DELETE FROM settings");
-    q.exec("DELETE FROM channels");
-    q.exec("DELETE FROM groups");
-    q.exec("DELETE FROM assignments");
-    q.exec("DELETE FROM used_keys");
-    q.exec("DELETE FROM clients");
-    q.exec("DELETE FROM complaints");
-    q.exec("DELETE FROM offline_messages");
-    q.exec("DELETE FROM files");
+    bool ok = true;
+    ok &= q.exec("DELETE FROM settings");
+    ok &= q.exec("DELETE FROM channels");
+    ok &= q.exec("DELETE FROM groups");
+    ok &= q.exec("DELETE FROM assignments");
+    ok &= q.exec("DELETE FROM used_keys");
+    ok &= q.exec("DELETE FROM clients");
+    ok &= q.exec("DELETE FROM complaints");
+    ok &= q.exec("DELETE FROM offline_messages");
+    ok &= q.exec("DELETE FROM files");
+    if (!ok) {
+        log("SQL SAVE ERROR on DELETE: " + q.lastError().text());
+    }
 
     q.prepare("INSERT INTO settings (`key`, `value`) VALUES (:key, :value)");
     q.bindValue(":key", "name"); q.bindValue(":value", m_name); q.exec();
@@ -651,7 +658,9 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":codecQuality", c.quality);
         q.bindValue(":maxClients", c.maxClients);
         q.bindValue(":ntalk", c.ntalk);
-        q.exec();
+        if (!q.exec()) {
+            log("SQL SAVE ERROR on channels: " + q.lastError().text());
+        }
     }
 
     q.prepare("INSERT INTO groups (`id`, `name`, `sigla`, `order_index`, `icon`, `perms`) "
@@ -663,20 +672,27 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":order_index", g.order);
         q.bindValue(":icon", g.icon);
         q.bindValue(":perms", QString::fromUtf8(QJsonDocument(g.perms).toJson(QJsonDocument::Compact)));
-        q.exec();
+        if (!q.exec()) {
+            log("SQL SAVE ERROR on groups: " + q.lastError().text());
+        }
     }
 
     q.prepare("INSERT INTO assignments (`uid`, `groupId`) VALUES (:uid, :groupId)");
     for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it) {
         q.bindValue(":uid", it.key());
         q.bindValue(":groupId", it.value());
-        q.exec();
+        if (!q.exec()) {
+            log(QStringLiteral("SQL SAVE ERROR on assignments (uid=%1, gid=%2): %3")
+                .arg(it.key()).arg(QString::number(it.value())).arg(q.lastError().text()));
+        }
     }
 
     q.prepare("INSERT INTO used_keys (`key_val`) VALUES (:key)");
     for (const QString& k : m_usedKeys) {
         q.bindValue(":key", k);
-        q.exec();
+        if (!q.exec()) {
+            log("SQL SAVE ERROR on used_keys: " + q.lastError().text());
+        }
     }
 
     q.prepare("INSERT INTO clients (`uid`, `name`, `firstSeen`, `lastSeen`) VALUES (:uid, :name, :first, :last)");
@@ -685,7 +701,9 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":name", it.value().name);
         q.bindValue(":first", it.value().firstSeen.toString(Qt::ISODate));
         q.bindValue(":last", it.value().lastSeen.toString(Qt::ISODate));
-        q.exec();
+        if (!q.exec()) {
+            log("SQL SAVE ERROR on clients: " + q.lastError().text());
+        }
     }
 
     q.prepare("INSERT INTO complaints (`uid`, `name`, `byUid`, `byName`, `text`, `ts`) VALUES (:uid, :name, :byUid, :byName, :text, :ts)");
@@ -696,7 +714,9 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":byName", cp.byName);
         q.bindValue(":text", cp.text);
         q.bindValue(":ts", cp.ts.toString(Qt::ISODate));
-        q.exec();
+        if (!q.exec()) {
+            log("SQL SAVE ERROR on complaints: " + q.lastError().text());
+        }
     }
 
     q.prepare("INSERT INTO offline_messages (`targetUid`, `fromUid`, `fromName`, `text`, `ts`) VALUES (:targetUid, :fromUid, :fromName, :text, :ts)");
@@ -707,7 +727,9 @@ void ServerCore::saveDataToSql() {
             q.bindValue(":fromName", om.fromName);
             q.bindValue(":text", om.text);
             q.bindValue(":ts", om.ts.toString(Qt::ISODate));
-            q.exec();
+            if (!q.exec()) {
+                log("SQL SAVE ERROR on offline_messages: " + q.lastError().text());
+            }
         }
     }
 
@@ -719,10 +741,16 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":byName", fm.by);
         q.bindValue(":size", fm.size);
         q.bindValue(":ts", fm.ts.toString(Qt::ISODate));
-        q.exec();
+        if (!q.exec()) {
+            log("SQL SAVE ERROR on files: " + q.lastError().text());
+        }
     }
 
-    db.commit();
+    if (!db.commit()) {
+        log("SQL SAVE TRANSACTION COMMIT FAILED: " + db.lastError().text());
+    } else {
+        log("DEBUG: saveDataToSql concluído com sucesso e commitado!");
+    }
 }
 
 void ServerCore::loadBans() {
@@ -969,6 +997,8 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
 
     // grupo: atribuição persistente por UID tem prioridade; senão "normal"
     int gid = m_assignByUid.value(uid, 0);
+    log(QStringLiteral("DEBUG: Cliente \"%1\" com UID \"%2\" conectando. GID mapeado recuperado: %3")
+            .arg(nick, uid, QString::number(gid)));
     if (!m_groups.contains(gid)) gid = 2; // normal
     applyGroup(c, gid, false);
     // senha de administrador eleva a admin (mesmo com atribuição salva)
