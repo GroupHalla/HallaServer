@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.2-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.3-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.2-win64.zip
+          path: halla-server-3.2.3-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -112,13 +112,13 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.2-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-3.2.3-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.2-linux-x64.tar.gz
+          path: halla-server-3.2.3-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -138,24 +138,27 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.2
-          name: Halla Server 3.2.2 — Banco de Dados Relacional SQLite
+          tag_name: v3.2.3
+          name: Halla Server 3.2.3 — Suporte ao MySQL/MariaDB e Controle Total
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.2-win64.zip
-            halla-server-3.2.2-linux-x64.tar.gz
+            halla-server-3.2.3-win64.zip
+            halla-server-3.2.3-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.2
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.3
 
-            Esta release traz o novíssimo motor de persistência relacional integrado em SQLite, além da sincronia avançada de ordenação de cargos e suporte a múltiplos cargos!
+            Esta release traz o suporte completo ao banco de dados relacional **MySQL / MariaDB** integrado, o bypass definitivo de permissões para administradores, e o protocolo de sincronização Base64 de imagens de cargos!
 
-            ### 💾 Transição para Banco de Dados Relacional SQLite
-            * **Adeus arquivos JSON simples:** O Halla Server agora utiliza um banco de dados relacional **SQLite nativo** (`halla-data.db`), garantindo maior performance, integridade referencial dos dados e estabilidade em servidores com grande volume de usuários.
-            * **Migração 100% Automática:** Servidores antigos que possuam os arquivos `halla-data.json` e `halla-bans.json` serão migrados de forma totalmente silenciosa e automática para o banco SQLite na primeira inicialização!
+            ### 💾 Suporte Completo ao MySQL e MariaDB (Item 3)
+            * **Independência de Dialeto:** Além do SQLite local, o Halla Server agora pode se conectar diretamente a instâncias remotas ou locais de **MySQL e MariaDB** via driver `QMYSQL`!
+            * **Configuração Facilitada:** Defina o tipo do banco de dados, porta, host e credenciais na nova seção `[database]` do arquivo `halla-server.ini`!
+            * **Estabilidade SQL:** Todas as consultas, criações e inserções SQL foram blindadas com crases em colunas reservadas como `` `key` `` e `` `desc` `` para funcionamento 100% livre de falhas!
 
-            ### 🏷️ Ordenação Hierárquica e Ícones de Cargos (Item 11 e Item 9)
-            * **Ordem de Cargos:** O servidor transmite perfeitamente a propriedade `order` para classificar os membros de canais na árvore do cliente (ex: administradores no topo, moderadores abaixo, etc.).
-            * **Múltiplos Ícones em Cargos:** O cliente Halla agora renderiza múltiplos distintivos coloridos ou emojis diretamente no final do apelido do usuário na lista de conectados para representar todos os cargos dele!
+            ### 🛡️ Controle Total e Bypass para Administradores
+            * **Bypass de Permissões:** Qualquer usuário que pertencer ao grupo `admin` (ID 3), tiver o nome de cargo `"admin"`, nickname `"serveradmin"`, ou tiver usado uma chave de privilégio administrativa, recebe **liberação completa e irrestrita** de 100% das checagens do servidor de forma nativa!
+
+            ### 🏷️ Envio de Ícones de Cargo em Base64 (Item 9)
+            * **Imagens de Cargos no Servidor:** O servidor armazena imagens de cargos na pasta `/icons/` e as serve em Base64 sob demanda do cliente via mensagens `"icon_get"` e `"icon_data"`!
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
