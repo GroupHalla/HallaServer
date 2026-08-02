@@ -47,7 +47,7 @@ jobs:
           cp build/halla-server.exe dist/HallaServer/
           cp halla-server.ini dist/HallaServer/
           
-          # Deploy Qt dependencies
+          # Deploy Qt dependencies using MSYS2's native windeployqt
           windeployqt --release --no-translations --no-compiler-runtime --dir dist/HallaServer dist/HallaServer/halla-server.exe
           
           # Copy MinGW runtime DLLs
@@ -55,20 +55,36 @@ jobs:
           cp /mingw64/bin/libstdc++-6.dll dist/HallaServer/
           cp /mingw64/bin/libwinpthread-1.dll dist/HallaServer/
           
-          # Copy extra dependencies
-          cp /mingw64/bin/libdouble-conversion.dll dist/HallaServer/ || true
-          cp /mingw64/bin/libpcre2-16.dll dist/HallaServer/ || true
-          cp /mingw64/bin/libzstd.dll dist/HallaServer/ || true
+          # Recursively resolve and copy ALL DLL dependencies from /mingw64/bin!
+          # This guarantees libbrotlidec, zlib1, libb2, libicuin, and any other system-provided libraries are included!
+          echo ">> Resolvendo e copiando dependências recursivas de DLLs do sistema..."
+          COPIED=true
+          while [ "$COPIED" = true ]; do
+            COPIED=false
+            for f in $(find dist/HallaServer -type f \( -name "*.exe" -o -name "*.dll" \)); do
+              for dep in $(ldd "$f" | grep -i "mingw" | awk '{print $3}'); do
+                if [ ! -z "$dep" ]; then
+                  dep_unix=$(cygpath -u "$dep" 2>/dev/null || echo "$dep")
+                  dep_name=$(basename "$dep_unix")
+                  if [ ! -f "dist/HallaServer/$dep_name" ] && [ -f "$dep_unix" ]; then
+                    echo "Copiando dependência encontrada: $dep_name de $dep_unix"
+                    cp "$dep_unix" dist/HallaServer/
+                    COPIED=true
+                  fi
+                fi
+              done
+            done
+          done
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.0-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.1-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.0-win64.zip
+          path: halla-server-3.2.1-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -96,13 +112,13 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.0-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-3.2.1-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.0-linux-x64.tar.gz
+          path: halla-server-3.2.1-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -122,17 +138,20 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.0
-          name: Halla Server 3.2.0 — Cargos e Limpeza de Marca
+          tag_name: v3.2.1
+          name: Halla Server 3.2.1 — Cargos e Resolvedor de Dependências
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.0-win64.zip
-            halla-server-3.2.0-linux-x64.tar.gz
+            halla-server-3.2.1-win64.zip
+            halla-server-3.2.1-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.0
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.1
 
-            Esta release traz as atualizações estruturais e aprimoramentos de sincronia de cargos/grupos para acompanhar o lançamento do cliente Halla v3.13.11!
+            Esta release traz a correção definitiva de DLLs ausentes no Windows, além das atualizações estruturais de sincronia de cargos/grupos para acompanhar o lançamento do cliente Halla v3.13.12!
+
+            ### 🩹 Correção Definitiva de DLLs Ausentes no Windows
+            * **Resolvedor Recursivo de DLLs:** Implementamos o mesmo resolvedor recursivo de dependências baseado em `ldd` do cliente. Ele analisa ciclicamente todas as DLLs e dependências de terceiros copiadas, garantindo que `libbrotlidec.dll`, `zlib1.dll`, `libb2-1.dll`, `libicuin78.dll` e demais arquivos do sistema de pacotes do MSYS2 sejam **100% incluídos no pacote de lançamento de forma autônoma**!
 
             ### 🏷️ Suporte a Metadados de Grupos e Cargos (Sigla, Order, Icon)
             * **Sincronia Completa de Cargos:** Expandimos a estrutura `GroupDef` no banco de dados e protocolo. O servidor agora transmite as propriedades `sigla` (ex: `[Mod]`), `order` (ordem de classificação hierárquica) e `icon` diretamente para os clientes conectados.
