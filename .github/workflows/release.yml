@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.3-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.4-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.3-win64.zip
+          path: halla-server-3.2.4-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -112,13 +112,13 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.3-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-3.2.4-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.3-linux-x64.tar.gz
+          path: halla-server-3.2.4-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -138,15 +138,15 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.3
-          name: Halla Server 3.2.3 — Suporte ao MySQL/MariaDB e Controle Total
+          tag_name: v3.2.4
+          name: Halla Server 3.2.4 — Suporte ao MySQL/MariaDB e Controle Total
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.3-win64.zip
-            halla-server-3.2.3-linux-x64.tar.gz
+            halla-server-3.2.4-win64.zip
+            halla-server-3.2.4-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.3
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.4
 
             Esta release traz o suporte completo ao banco de dados relacional **MySQL / MariaDB** integrado, o bypass definitivo de permissões para administradores, e o protocolo de sincronização Base64 de imagens de cargos!
 
