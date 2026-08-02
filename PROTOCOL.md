@@ -1,0 +1,111 @@
+# Halla Protocol v1
+
+Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
+pessoa possa implementar clientes/bots compatíveis.
+
+## Visão geral
+
+| Canal | Transporte | Porta padrão | Uso |
+|---|---|---|---|
+| Controle | TCP | 9987 | Autenticação, canais, chat, estados, moderação |
+| Voz | UDP | 9987 | Pacotes Opus de 20 ms retransmitidos por canal |
+
+## Controle (TCP)
+
+Mensagens são **objetos JSON compactados, um por linha** (`\n` como delimitador),
+codificados em UTF-8.
+
+### Cliente → Servidor
+
+| Mensagem | Campos | Descrição |
+|---|---|---|
+| `hello` | `proto`, `uid`, `nick`, `pass?`, `adminPass?`, `ver`, `platform` | Login. `proto` = 1 |
+| `ping` | `ts` | Medição de latência (resposta `pong` com mesmo `ts`) |
+| `chat` | `scope` (`server`/`channel`/`private`), `to?`, `text` | Envia mensagem de chat |
+| `move` | `channel`, `pass?` | Trocar de canal |
+| `voice_hello` | — | Solicita token de voz/UDP |
+| `talking` | `on` (bool) | Indicador "está falando" |
+| `status` | `mic?` `spk?` `away?` `rec?` `cc?` (bool) | Atualiza estados do próprio usuário |
+| `nick` | `name` | Alterar apelido |
+| `desc` | `text` | Alterar descrição |
+| `poke` | `to`, `msg` | Cutucar cliente |
+| `volume` | `to`, `db` (−40..12) | Volume local de outro cliente (não é retransmitido pela voz; cada cliente aplica localmente ao decodificar) — informativo ao servidor |
+| `chan_create` | `name`, `parent`, `topic?`, `desc?`, `pass?`, `type` (0 temporário/1 semi/2 permanente), `codec`, `quality`, `max`, `moderated?` | Criar canal |
+| `chan_edit` | `id`, +campos de `chan_create` | Editar canal |
+| `chan_delete` | `id` | Excluir canal |
+| `kick` | `id`, `reason?`, `from` (`channel`/`server`) | Expulsar (requer permissão) |
+| `ban` | `id`, `reason?`, `minutes` (0 = permanente) | Banir (requer admin) |
+| `privkey` | `key` | Usar chave de privilégio (concede grupo) |
+| `quit` | — | Desconexão educada |
+
+### Servidor → Cliente
+
+| Mensagem | Campos | Descrição |
+|---|---|---|
+| `welcome` | `selfId`, `server:{name,motd,ver,platform,maxClients}`, `channels:[…]`, `users:[…]`, `voice:{udp,token}` | Estado completo após login |
+| `pong` | `ts` | Resposta ao ping |
+| `error` | `code`, `msg` | Erros (`bad_password`, `server_full`, `banned`, `name_in_use`, `no_permission`, `bad_channel_pass`…) e depois a conexão é encerrada quando fatal |
+| `chat` | `scope`, `from`, `text` | Chat retransmitido |
+| `user_joined` | `user:{…}` | Novo cliente entrou |
+| `user_left` | `id`, `reason` (`quit`/`kicked`/`banned`/`dropped`) | Cliente saiu |
+| `user_moved` | `id`, `channel`, `by?` | Cliente trocou de canal |
+| `user_state` | `id` + campos de `status`/`talking` | Estado mudou |
+| `user_nick` | `id`, `name` | Apelido mudou |
+| `user_desc` | `id`, `text` | Descrição mudou |
+| `user_group` | `id`, `group` | Grupo mudou (ex.: chave de privilégio) |
+| `chan_update` | `chan:{…}` | Canal criado ou editado |
+| `chan_removed` | `id` | Canal removido |
+| `poke` | `from`, `msg` | Você foi cutucado |
+| `kicked` | `reason`, `ban` (bool), `minutes?` | Você foi expulso/banido (conexão encerrada a seguir) |
+
+### Objeto `user`
+
+```json
+{"id":5,"name":"Ana","uid":"base64…","ver":"3.6.2","platform":"Windows",
+ "desc":"","group":"normal","mic":false,"spk":false,"away":false,
+ "rec":false,"cc":false,"talking":false}
+```
+
+### Objeto `chan`
+
+```json
+{"id":1,"parent":0,"name":"Canal padrão","topic":"","desc":"","pw":false,
+ "def":true,"type":2,"moderated":false,"codec":4,"quality":6,"max":-1,
+ "users":[5,7]}
+```
+
+## Voz (UDP)
+
+### Pacote cliente → servidor
+
+| Bytes | Campo |
+|---|---|
+| 4 | magic `"HALL"` |
+| 4 | token (little-endian, recebido no `welcome`) |
+| 2 | sequência u16 |
+| N | frame Opus (20 ms, 48 kHz, mono) |
+
+O servidor aprende o endereço UDP do cliente pelo primeiro pacote recebido
+(amigável a NAT) e retransmite os frames para os membros do mesmo canal.
+
+### Pacote servidor → cliente
+
+| Bytes | Campo |
+|---|---|
+| 4 | magic `"HALL"` |
+| 4 | id do falante |
+| 2 | sequência u16 |
+| N | frame Opus |
+
+O servidor nunca decodifica Opus — é um relay puro (baixíssima latência e CPU).
+
+## Permissões (grupos)
+
+| Grupo | Cria canal permanente/semi | Temporário | Poke | Kick canal | Kick servidor | Ban |
+|---|---|---|---|---|---|---|
+| `guest` | – | – | ✔ | – | – | – |
+| `normal` | – | ✔ | ✔ | – | – | – |
+| `admin` | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ |
+
+Grupos são atribuídos via `adminPass` no `hello` ou mensagem `privkey` válida
+(chaves configuradas no `halla-server.ini`).

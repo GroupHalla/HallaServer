@@ -1,0 +1,20 @@
+[Unit]
+Description=Halla Server (voz e chat)
+After=network.target
+
+[Service]
+Type=simple
+User=halla
+Group=halla
+WorkingDirectory=/opt/halla
+ExecStart=/opt/halla/halla-server --config /opt/halla/halla-server.ini
+Restart=on-failure
+RestartSec=3
+# endurecimento básico
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
