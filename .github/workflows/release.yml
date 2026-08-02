@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.5-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.6-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.5-win64.zip
+          path: halla-server-3.2.6-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -112,13 +112,13 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.5-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-3.2.6-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.5-linux-x64.tar.gz
+          path: halla-server-3.2.6-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -138,30 +138,19 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.5
-          name: Halla Server 3.2.5 — Geração de Chaves e Controle de Banco
+          tag_name: v3.2.6
+          name: Halla Server 3.2.6 — Geração Automática de Chaves
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.5-win64.zip
-            halla-server-3.2.5-linux-x64.tar.gz
+            halla-server-3.2.6-win64.zip
+            halla-server-3.2.6-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.5
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.6
 
-            Esta release consolida a geração de chaves de privilégio de forma automática (idêntica ao TeamSpeak 3), o suporte completo ao banco de dados relacional **MySQL / MariaDB** integrado, o bypass definitivo de permissões para administradores, e o protocolo de sincronização Base64 de imagens de cargos!
+            Esta release corrige as chaves de exemplo do arquivo `.ini` que impediam a ativação da geração automática do primeiro privilégio.
 
-            ### 🔑 Geração Automática de Chaves de Privilégio (Estilo TS3)
-            * **Chaves Autogeradas:** Se nenhuma chave de privilégio estiver configurada no arquivo `.ini`, o servidor gera automaticamente uma chave única e segura do tipo `HL3-XXXX-YYYY-ZZZZ-WWWW` na primeira execução, salva no banco de dados, e a exibe em um destaque no console para que o dono consiga se registrar como Admin de forma instantânea!
-
-            ### 💾 Suporte Completo ao MySQL e MariaDB (Item 3)
-            * **Independência de Dialeto:** Além do SQLite local, o Halla Server agora pode se conectar diretamente a instâncias remotas ou locais de **MySQL e MariaDB** via driver `QMYSQL`!
-            * **Configuração Facilitada:** Defina o tipo do banco de dados, porta, host e credenciais na nova seção `[database]` do arquivo `halla-server.ini`!
-            * **Estabilidade SQL:** Todas as consultas, criações e inserções SQL foram blindadas com crases em colunas reservadas como `` `key` `` e `` `desc` `` para funcionamento 100% livre de falhas!
-
-            ### 🛡️ Controle Total e Bypass para Administradores
-            * **Bypass de Permissões:** Qualquer usuário que pertencer ao grupo `admin` (ID 3), tiver o nome de cargo `"admin"`, nickname `"serveradmin"`, ou tiver usado uma chave de privilégio administrativa, recebe **liberação completa e irrestrita** de 100% das checagens do servidor de forma nativa!
-
-            ### 🏷️ Envio de Ícones de Cargo em Base64 (Item 9)
-            * **Imagens de Cargos no Servidor:** O servidor armazena imagens de cargos na pasta `/icons/` e as serve em Base64 sob demanda do cliente via mensagens `"icon_get"` e `"icon_data"`!
+            ### 🔑 Geração de Chaves de Privilégio (Estilo TS3)
+            * **Chaves Autogeradas Nativamente:** O arquivo `halla-server.ini` de exemplo agora vem com o campo `privilegeKeys = ` limpo por padrão. Isso garante que o servidor gere de forma automática uma chave única e segura do tipo `HL3-XXXX-YYYY-ZZZZ-WWWW` na primeira execução, a salve no banco de dados e a exiba no console para obter privilégios totais de forma instantânea!
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
