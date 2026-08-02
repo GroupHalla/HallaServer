@@ -4,10 +4,12 @@
 #include "HallaProtocol.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QDateTime>
 #include <QDir>
+#include <QCryptographicHash>
 
 ServerCore::ServerCore(QObject* parent) : QObject(parent) {
     m_nextToken = 1024;
@@ -26,6 +28,7 @@ ServerCore::~ServerCore() {
 bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
     loadData();
     loadBans();
+    loadAvatars();
 
     m_tcp = new QTcpServer(this);
     connect(m_tcp, &QTcpServer::newConnection, this, &ServerCore::onNewConnection);
@@ -195,6 +198,31 @@ void ServerCore::loadData() {
         rc.lastSeen = QDateTime::fromString(o["last"].toString(), Qt::ISODate);
         m_registry[it.key()] = rc;
     }
+    // v3: reclamações
+    for (const QJsonValue& v : root["complaints"].toArray()) {
+        const QJsonObject o = v.toObject();
+        Complaint cp{o["uid"].toString(), o["name"].toString(), o["byUid"].toString(),
+                     o["byName"].toString(), o["text"].toString(),
+                     QDateTime::fromString(o["ts"].toString(), Qt::ISODate)};
+        m_complaints << cp;
+    }
+    // v3: mensagens offline pendentes
+    const QJsonObject off = root["offline"].toObject();
+    for (auto it = off.begin(); it != off.end(); ++it) {
+        for (const QJsonValue& v : it.value().toArray()) {
+            const QJsonObject o = v.toObject();
+            m_offline[it.key()] << OfflineMsg{o["fromUid"].toString(), o["from"].toString(),
+                                              o["text"].toString(),
+                                              QDateTime::fromString(o["ts"].toString(), Qt::ISODate)};
+        }
+    }
+    // v3: metadados de arquivos
+    for (const QJsonValue& v : root["files"].toArray()) {
+        const QJsonObject o = v.toObject();
+        m_files << FileMeta{o["chan"].toInt(), o["name"].toString(), o["byUid"].toString(),
+                            o["by"].toString(), o["size"].toString().toLongLong(),
+                            QDateTime::fromString(o["ts"].toString(), Qt::ISODate)};
+    }
     log(QStringLiteral("Dados carregados: %1 canais, %2 grupos, %3 identidades")
             .arg(m_channels.size()).arg(m_groups.size()).arg(m_registry.size()));
 }
@@ -221,6 +249,33 @@ void ServerCore::saveData() {
         o["last"] = it.value().lastSeen.toString(Qt::ISODate);
         clients[it.key()] = o;
     }
+    // v3: reclamações, offline, arquivos
+    QJsonArray complaints;
+    for (const Complaint& cp : m_complaints) {
+        QJsonObject o;
+        o["uid"] = cp.uid; o["name"] = cp.name; o["byUid"] = cp.byUid;
+        o["byName"] = cp.byName; o["text"] = cp.text; o["ts"] = cp.ts.toString(Qt::ISODate);
+        complaints << o;
+    }
+    QJsonObject offline;
+    for (auto it = m_offline.begin(); it != m_offline.end(); ++it) {
+        QJsonArray arr;
+        for (const OfflineMsg& om : it.value()) {
+            QJsonObject o;
+            o["fromUid"] = om.fromUid; o["from"] = om.fromName; o["text"] = om.text;
+            o["ts"] = om.ts.toString(Qt::ISODate);
+            arr << o;
+        }
+        if (!arr.isEmpty()) offline[it.key()] = arr;
+    }
+    QJsonArray files;
+    for (const FileMeta& fm : m_files) {
+        QJsonObject o;
+        o["chan"] = fm.chan; o["name"] = fm.name; o["byUid"] = fm.byUid; o["by"] = fm.by;
+        o["size"] = QString::number(fm.size); o["ts"] = fm.ts.toString(Qt::ISODate);
+        files << o;
+    }
+
     QJsonObject root;
     root["name"] = m_name;
     root["motd"] = m_motd;
@@ -229,6 +284,9 @@ void ServerCore::saveData() {
     root["assignments"] = assign;
     root["usedKeys"] = used;
     root["clients"] = clients;
+    root["complaints"] = complaints;
+    root["offline"] = offline;
+    root["files"] = files;
     QFile f(m_dataFile);
     if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
@@ -368,6 +426,17 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "group_delete") handleGroupDelete(c, obj);
     else if (t == "client_set_group") handleClientSetGroup(c, obj);
     else if (t == "server_edit") handleServerEdit(c, obj);
+    else if (t == "avatar_set")     handleAvatarSet(c, obj);
+    else if (t == "avatar_get")     handleAvatarGet(c, obj);
+    else if (t == "offline_send")   handleOfflineSend(c, obj);
+    else if (t == "complaint_add")  handleComplaintAdd(c, obj);
+    else if (t == "complaint_list") handleComplaintList(c);
+    else if (t == "complaint_clear") handleComplaintClear(c, obj);
+    else if (t == "whisper")        handleWhisper(c, obj);
+    else if (t == "ft_upload")      handleFtUpload(c, obj);
+    else if (t == "ft_list")        handleFtList(c, obj);
+    else if (t == "ft_download")    handleFtDownload(c, obj);
+    else if (t == "ft_delete")      handleFtDelete(c, obj);
     else if (t == "quit") {
         // desconexão graciosa: notifica os demais antes de fechar
         QJsonObject left = HProto::msg("user_left");
@@ -464,8 +533,23 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     log(QStringLiteral("Cliente #%1 (%2) entrou [grupo: %3]")
             .arg(c->id()).arg(nick, c->group()));
 
+    c->setAvatarHash(m_avatarHash.value(uid)); // v3: avatar salvo
     sendWelcome(c);
     registerClient(c);
+
+    // v3: entrega mensagens offline pendentes
+    if (m_offline.contains(uid) && !m_offline[uid].isEmpty()) {
+        for (const OfflineMsg& om : m_offline[uid]) {
+            QJsonObject m = HProto::msg("offline_msg");
+            m["fromUid"] = om.fromUid;
+            m["fromName"] = om.fromName;
+            m["text"] = om.text;
+            m["ts"] = om.ts.toString(Qt::ISODate);
+            c->send(m);
+        }
+        m_offline.remove(uid);
+        saveData();
+    }
 
     QJsonObject joined = HProto::msg("user_joined");
     joined["user"] = c->toJson();
@@ -706,6 +790,7 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.codec = qBound(0, obj["codec"].toInt(4), 5);
     ch.quality = qBound(0, obj["quality"].toInt(6), 10);
     ch.maxClients = obj["max"].toInt(-1);
+    ch.ops << c->uniqueId(); // v3: criador vira operador do canal
     m_channels[ch.id] = ch;
     saveData();
 
@@ -717,8 +802,26 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     const int id = obj["id"].toInt();
     if (!m_channels.contains(id)) return;
-    if (!hasPerm(c, "chanEdit")) {
+    // v3: operador do canal pode editar o próprio canal (exceto o padrão)
+    if (!hasPerm(c, "chanEdit") && !(id != 1 && isChanOp(c, id))) {
         sendError(c, "no_permission", "Sem permissão para editar canais");
+        return;
+    }
+    // operadores de canal podem promover/rebaixar outros operadores (por UID)
+    if (obj.contains("op_add") || obj.contains("op_del")) {
+        if (!hasPerm(c, "chanEdit") && !isChanOp(c, id)) {
+            sendError(c, "no_permission", "Sem permissão para gerenciar operadores");
+            return;
+        }
+        const QString targetUid = obj["uid"].toString();
+        SvrChan& chan = m_channels[id];
+        if (obj.contains("op_add") && !targetUid.isEmpty() && !chan.ops.contains(targetUid))
+            chan.ops << targetUid;
+        if (obj.contains("op_del")) chan.ops.removeAll(targetUid);
+        saveData();
+        QJsonObject m = HProto::msg("chan_update");
+        m["chan"] = chanToJson(chan);
+        broadcast(m);
         return;
     }
     SvrChan& ch = m_channels[id];
@@ -761,6 +864,7 @@ void ServerCore::handleChanDelete(ClientSession* c, const QJsonObject& obj) {
         broadcast(m);
     }
     m_channels.remove(id);
+    removeChannelFiles(id); // v3: apaga arquivos do canal
     saveData();
     QJsonObject m = HProto::msg("chan_removed");
     m["id"] = id;
@@ -768,18 +872,27 @@ void ServerCore::handleChanDelete(ClientSession* c, const QJsonObject& obj) {
 }
 
 void ServerCore::handleKick(ClientSession* c, const QJsonObject& obj) {
-    if (!hasPerm(c, "kick")) {
+    const int id = obj["id"].toInt();
+    const bool fromServer = obj["from"].toString() == "server";
+    // v3: kick de CANAL também é permitido ao operador do canal da vítima
+    const bool chanKickByOp = !fromServer && m_clients.contains(id)
+                              && isChanOp(c, channelOfUser(id));
+    if (!hasPerm(c, "kick") && !chanKickByOp) {
         sendError(c, "no_permission", "Sem permissão para expulsar");
         return;
     }
-    const int id = obj["id"].toInt();
     if (!m_clients.contains(id) || id == c->id()) return;
+    // operador não expulsa outro operador do mesmo canal
+    if (chanKickByOp && !hasPerm(c, "kick")
+            && m_channels[channelOfUser(id)].ops.contains(m_clients[id]->uniqueId())) {
+        sendError(c, "no_permission", "Você não pode expulsar outro operador");
+        return;
+    }
     // não-administrador supremo não expulsa administrador supremo
     if (!hasPerm(c, "*") && hasPerm(m_clients[id], "*")) {
         sendError(c, "no_permission", "Você não pode expulsar este cliente");
         return;
     }
-    const bool fromServer = obj["from"].toString() == "server";
     doKick(m_clients[id], obj["reason"].toString(), fromServer, false);
 }
 
@@ -1067,6 +1180,7 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
     c.codec = o["codec"].toInt(4);
     c.quality = o["quality"].toInt(6);
     c.maxClients = o["max"].toInt(-1);
+    for (const QJsonValue& v : o["ops"].toArray()) c.ops << v.toString();
     return c;
 }
 
@@ -1075,7 +1189,62 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
                                      !c.password.isEmpty(), c.id == 1, c.type, c.moderated,
                                      c.codec, c.quality, c.maxClients, c.users);
     j["ntalk"] = c.ntalk;
+    QJsonArray ops;
+    for (const QString& u : c.ops) ops << u;
+    j["ops"] = ops;
     return j;
+}
+
+// ================================================== helpers v3
+QString ServerCore::dataDir() const {
+    if (m_dataFile.isEmpty()) return QDir::currentPath();
+    return QFileInfo(m_dataFile).absolutePath();
+}
+
+QString ServerCore::avatarPath(const QString& uid) const {
+    // uid é base64: trocar caracteres problemáticos de nome de arquivo
+    QString safe = uid;
+    safe.replace('/', '_').replace('+', '-');
+    return dataDir() + QStringLiteral("/avatars/%1.avt").arg(safe);
+}
+
+QString ServerCore::filesDir(int chan) const {
+    return dataDir() + QStringLiteral("/files/%1").arg(chan);
+}
+
+QString ServerCore::sanitizeFileName(const QString& n) {
+    QString out;
+    for (const QChar& ch : n.left(60))
+        if (ch.isLetterOrNumber() || ch == QLatin1Char('.') || ch == QLatin1Char('_')
+                || ch == QLatin1Char('-') || ch == QLatin1Char(' '))
+            out += ch;
+    if (out.isEmpty() || out.startsWith(QLatin1Char('.'))) out.prepend(QLatin1Char('_'));
+    return out;
+}
+
+bool ServerCore::isChanOp(const ClientSession* c, int channelId) const {
+    if (!c || !m_channels.contains(channelId)) return false;
+    return m_channels[channelId].ops.contains(c->uniqueId());
+}
+
+void ServerCore::removeChannelFiles(int chan) {
+    for (int i = m_files.size() - 1; i >= 0; --i)
+        if (m_files[i].chan == chan) m_files.removeAt(i);
+    QDir(filesDir(chan)).removeRecursively();
+}
+
+void ServerCore::loadAvatars() {
+    m_avatarHash.clear();
+    QDir d(dataDir() + QStringLiteral("/avatars"));
+    for (const QFileInfo& fi : d.entryInfoList({QStringLiteral("*.avt")}, QDir::Files)) {
+        QString uid = fi.completeBaseName();
+        uid.replace('_', '/').replace('-', '+');
+        // hash = sha1 do conteúdo
+        QFile f(fi.absoluteFilePath());
+        if (f.open(QIODevice::ReadOnly))
+            m_avatarHash[uid] = QString::fromLatin1(
+                QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha1).toHex());
+    }
 }
 
 void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload) {
@@ -1085,11 +1254,14 @@ void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray
     // Cenário 3: talk power — pacotes de voz de quem não pode falar são descartados
     if (!canTalkIn(sender, chan)) return;
 
+    const QSet<int> whisper = sender->whisperIds();   // v3: sussurro para alvos específicos
     const QByteArray packet = HProto::encodeVoiceServer(quint32(sender->id()), seq, payload);
     for (ClientSession* c : m_clients) {
         if (c == sender) continue;
         if (c->udpPort() == 0) continue;                     // ainda não falou nada
-        if (channelOfUser(c->id()) != chan) continue;
+        if (!whisper.isEmpty()) {
+            if (!whisper.contains(c->id())) continue;        // sussurro: só os alvos
+        } else if (channelOfUser(c->id()) != chan) continue; // normal: só o canal
         m_voice->sendTo(c->udpAddress(), c->udpPort(), packet);
     }
 }

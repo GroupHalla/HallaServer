@@ -18,7 +18,7 @@ namespace HProto {
 
 constexpr quint16 kDefaultPort = 9987;
 constexpr quint32 kVoiceMagic = 0x48414C4C; // "HALL"
-constexpr int kProtoVersion = 2;    // versão máxima suportada
+constexpr int kProtoVersion = 3;    // versão máxima suportada
 constexpr int kProtoMin = 1;        // versão mínima aceita pelo servidor
 
 // ---- controle TCP: JSON compactado terminado em '\n' ----------------------

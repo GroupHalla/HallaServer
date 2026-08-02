@@ -209,3 +209,81 @@ registro persistente (`halla-data.json` → `clients`) com nome, primeira e
 - Bans por UID (e por IP, adicionado na v2);
 - Atribuições de grupo (`assignments`: uid → gid), aplicadas a cada login;
 - Chaves de privilégio conferem grupo permanentemente ao UID.
+
+---
+
+# Protocolo v3 (Halla Server 3.0.0)
+
+`hello { proto: 3 }`. O servidor aceita clientes v1 e v2 também
+(`kProtoMin = 1`): recursos v3 só existem quando ambos os lados são v3.
+
+## Avatares
+
+| Mensagem | Direção | Campos | Descrição |
+|---|---|---|---|
+| `avatar_set` | C→S | `data` (base64, ≤ 128 KiB, vazio = remover) | Define o seu avatar |
+| `avatar_get` | C→S | `uid` | Pede o avatar de um cliente |
+| `avatar_data` | S→C | `uid`, `data` (base64, pode ser vazio) | Resposta ao `avatar_get` |
+| `user_avatar` | S→C (broadcast) | `id`, `av` (hash sha-1) | Avatar mudou — o campo `av` também vem em `users[].av` |
+
+Arquivos ficam em `<dados>/avatars/<uid>.avt`; o usuário (json) carrega `av`
+(hash) para o cliente saber se há avatar sem baixar.
+
+## Mensagens offline
+
+| Mensagem | Direção | Campos | Descrição |
+|---|---|---|---|
+| `offline_send` | C→S | `uid`, `text` (≤ 500) | Deixa mensagem para um UID registrado |
+| `offline_sent` | S→C | `uid` | Confirmada a entrega à caixa do UID |
+| `offline_msg` | S→C | `fromUid`, `fromName`, `text`, `ts` | Entregue **no login**, uma por mensagem (máx. 20 por caixa) |
+
+Erros: `not_found` (UID desconhecido), `inbox_full`.
+
+## Reclamações (complaints)
+
+| Mensagem | Direção | Campos | Descrição |
+|---|---|---|---|
+| `complaint_add` | C→S | `id` (id numérico do alvo), `text` | Registra reclamação sobre um cliente |
+| `complaint_added` | S→C | — | Confirmação |
+| `complaint_list` | C→S / S→C | `complaints:[{uid,name,byUid,byName,text,ts}]` | Listar (perm `banList`) |
+| `complaint_clear` | C→S | `uid` (omitir = todas) | Limpar (perm `banList`) |
+| `complaint_cleared` | S→C | `uid` | Confirmação |
+
+## Operadores de canal
+
+Quem cria um canal vira **operador** dele (`channels[].ops` = lista de UIDs).
+Operadores podem: editar o próprio canal sem a permissão `chanEdit` e
+**expulsar usuários do próprio canal** (`kick` sem `from_server`), desde que o
+alvo não seja outro operador do canal. `chan_edit` aceita `op_add:[uid]` /
+`op_del:[uid]` (permissão `chanEdit`). Cliente vê operador pelo escudo verde.
+
+## Sussurro (whisper)
+
+```json
+{ "t":"whisper", "ids":[5,9] }
+```
+Enquanto a lista não for vazia, **sua voz (UDP) vai somente para esses ids**,
+independente do canal. `ids` vazio volta ao comportamento normal. Resposta:
+`whisper_ok { count }`. Ids são de sessão — remapear a cada login/troca de
+estado usando os UIDs.
+
+## Transferência de arquivos por canal
+
+| Mensagem | Direção | Campos | Descrição |
+|---|---|---|---|
+| `ft_upload` | C→S | `channel`, `name`, `data` (base64 ≤ 1 MiB) | Envia arquivo (máx. 50/canal, 10 MiB total) |
+| `ft_uploaded` | S→C | `channel`, `name`, `size` | Confirmação |
+| `ft_list` | C→S / S→C | `channel`, `files:[{name,size,by,ts}]` | Lista arquivos do canal |
+| `ft_download` | C→S | `channel`, `name` | Pede um arquivo |
+| `ft_data` | S→C | `channel`, `name`, `data` (base64) | Conteúdo |
+| `ft_delete` | C→S | `channel`, `name` | Excluir (dono, operador do canal ou `chanEdit`) |
+| `ft_deleted` | S→C | `channel`, `name` | Confirmação |
+
+Arquivos físicos em `<dados>/files/<canal>/<nome>`; metadados persistidos em
+`halla-data.json`. Visitantes (grupo guest) não enviam arquivos.
+
+## Moderados / poder de fala — lembrete
+
+O envio de voz do cliente deve chamar `talking=on` antes; sem poder de fala o
+servidor responde `no_talk_power` e descarta os pacotes até que o usuário se
+calle (`talking=off`).

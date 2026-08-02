@@ -8,9 +8,26 @@
 #include <QTimer>
 #include <QHostAddress>
 #include <QDateTime>
+#include <QSet>
 
 class ClientSession;
 class VoiceRelay;
+
+// v3: reclamação registrada contra um cliente
+struct Complaint {
+    QString uid, name, byUid, byName, text;
+    QDateTime ts;
+};
+// v3: mensagem offline pendente
+struct OfflineMsg {
+    QString fromUid, fromName, text;
+    QDateTime ts;
+};
+// v3: metadados de um arquivo de canal
+struct FileMeta {
+    int chan; QString name, byUid, by; qint64 size;
+    QDateTime ts;
+};
 
 struct BanEntry {
     QString uid;
@@ -99,6 +116,7 @@ private:
         bool def, moderated; int ntalk; // talk power necessário (0 = usa moderated?25:0)
         int type, codec, quality, maxClients;
         QList<int> users;
+        QList<QString> ops; // v3: UIDs dos operadores do canal (criador + promovidos)
     };
     QMap<int, SvrChan> m_channels;
     int m_nextChanId = 1;
@@ -112,6 +130,20 @@ private:
 
     QList<BanEntry> m_bans;
     QTimer* m_idleTimer = nullptr;
+
+    // ---- v3: avatares, offline, reclamações, arquivos
+    QMap<QString, QString> m_avatarHash;            // uid -> hash ("" = sem avatar)
+    QList<Complaint> m_complaints;
+    QMap<QString, QList<OfflineMsg>> m_offline;     // uid destino -> mensagens
+    QList<FileMeta> m_files;
+
+    QString dataDir() const;                        // diretório do dataFile
+    QString avatarPath(const QString& uid) const;
+    QString filesDir(int chan) const;
+    void loadAvatars();
+    bool isChanOp(const ClientSession* c, int channelId) const;
+    static QString sanitizeFileName(const QString& n);
+    void removeChannelFiles(int chan);
 
     void loadData();
     void saveData();
@@ -141,6 +173,18 @@ private:
     void handleClientSetGroup(ClientSession* c, const QJsonObject& obj);
     void handleServerEdit(ClientSession* c, const QJsonObject& obj);
     void handleTalking(ClientSession* c, const QJsonObject& obj);
+    // ---- v3
+    void handleAvatarSet(ClientSession* c, const QJsonObject& obj);
+    void handleAvatarGet(ClientSession* c, const QJsonObject& obj);
+    void handleOfflineSend(ClientSession* c, const QJsonObject& obj);
+    void handleComplaintAdd(ClientSession* c, const QJsonObject& obj);
+    void handleComplaintList(ClientSession* c);
+    void handleComplaintClear(ClientSession* c, const QJsonObject& obj);
+    void handleWhisper(ClientSession* c, const QJsonObject& obj);
+    void handleFtUpload(ClientSession* c, const QJsonObject& obj);
+    void handleFtList(ClientSession* c, const QJsonObject& obj);
+    void handleFtDownload(ClientSession* c, const QJsonObject& obj);
+    void handleFtDelete(ClientSession* c, const QJsonObject& obj);
 
     // permissões
     bool hasPerm(const ClientSession* c, const char* key) const;

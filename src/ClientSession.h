@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QHostAddress>
 #include <QDateTime>
+#include <QSet>
 
 class ServerCore;
 
@@ -61,6 +62,13 @@ public:
     void setVoiceToken(quint32 token)       { m_voiceToken = token; }
     quint32 voiceToken() const              { return m_voiceToken; }
 
+    // v3: sussurro (whisper) — conjunto de alvos; vazio = fala normal no canal
+    QSet<int> whisperIds() const            { return m_whisperIds; }
+    void setWhisperIds(const QSet<int>& s)  { m_whisperIds = s; }
+    // v3: avatar
+    QString avatarHash() const              { return m_avatarHash; }
+    void setAvatarHash(const QString& h)    { m_avatarHash = h; }
+
     QDateTime connectedAt() const           { return m_connectedAt; }
 
 signals:
@@ -93,5 +101,7 @@ private:
     QHostAddress m_udpAddr;
     quint16 m_udpPort = 0;
     quint32 m_voiceToken = 0;
+    QSet<int> m_whisperIds;
+    QString m_avatarHash;
     QDateTime m_connectedAt = QDateTime::currentDateTime();
 };

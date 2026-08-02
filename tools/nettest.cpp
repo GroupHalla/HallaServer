@@ -562,6 +562,187 @@ int main(int argc, char* argv[]) {
     QJsonObject blErr = E2.waitFor("error");
     CHECK(blErr["code"].toString() == "no_permission", "sem banList não vê banlist");
 
+    // ==================================================================
+    //  v3: avatares, mensagens offline, reclamações, operador de canal,
+    //      sussurro (whisper) e transferência de arquivos
+    // ==================================================================
+
+    // 50-51) avatar: D sobe um avatar; todo mundo vê o hash; avatar_get devolve
+    QByteArray pic(2048, 0);
+    for (int i = 0; i < pic.size(); ++i) pic[i] = char(i * 7);
+    QJsonObject avs = HProto::msg("avatar_set");
+    avs["data"] = QString::fromLatin1(pic.toBase64());
+    D.send(avs);
+    {
+        bool sawHash = false; QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !sawHash) {
+            QJsonObject ua = E2.waitFor("user_avatar", 400);
+            if (ua["id"].toInt() == D.id && !ua["av"].toString().isEmpty()) sawHash = true;
+        }
+        CHECK(sawHash, "avatar_set: hash do avatar propagado (user_avatar)");
+    }
+    QJsonObject avg = HProto::msg("avatar_get");
+    avg["uid"] = "uid-dave-0000000000000000000=";
+    E2.send(avg);
+    QJsonObject avd = E2.waitFor("avatar_data");
+    CHECK(QByteArray::fromBase64(avd["data"].toString().toLatin1()) == pic,
+          "avatar_get: conteúdo idêntico ao enviado");
+
+    // 52-53) offline: C sai; D deixa mensagem; C volta e recebe
+    const QString uidC = "uid-carol-000000000000000000=";
+    C.send(HProto::msg("quit"));
+    C.tcp.waitForDisconnected(1500);
+    QJsonObject om = HProto::msg("offline_send");
+    om["uid"] = uidC; om["text"] = "volta quando puder!";
+    D.send(om);
+    QJsonObject oms = D.waitFor("offline_sent");
+    CHECK(oms["uid"].toString() == uidC, "offline_send confirmado");
+    FakeClient C2("Carol");
+    C2.connectTo(host, port);
+    hello["uid"] = uidC; hello["nick"] = "Carol";
+    C2.send(hello);
+    QJsonObject wc2 = C2.waitFor("welcome");
+    C2.id = wc2["selfId"].toInt();
+    C2.token = wc2["voice"].toObject()["token"].toString().toUInt();
+    QJsonObject omd = C2.waitFor("offline_msg");
+    CHECK(omd["text"].toString() == "volta quando puder!" && omd["fromName"].toString() == "Dave",
+          "mensagem offline entregue no login");
+
+    // 54-55) reclamações: E2 reclama de C2; D (com banList) lista e limpa
+    QJsonObject cp = HProto::msg("complaint_add");
+    // E2 vê o user_joined de Carol (ela já estava conectada quando C2 entrou)
+    int idC2 = -1;
+    {
+        QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 2000 && idC2 < 0) {
+            QJsonObject j = E2.waitFor("user_joined", 300);
+            if (j["user"].toObject()["name"].toString() == "Carol")
+                idC2 = j["user"].toObject()["id"].toInt();
+        }
+    }
+    CHECK(idC2 > 0, "E2 viu Carol entrar (id conhecido)");
+    cp["id"] = idC2; cp["text"] = "flood no chat geral";
+    E2.send(cp);
+    QJsonObject cpa = E2.waitFor("complaint_added");
+    CHECK(cpa["t"].toString() == "complaint_added", "reclamação registrada");
+    D.send(HProto::msg("complaint_list"));
+    QJsonObject cpl = D.waitFor("complaint_list");
+    bool foundCp = false;
+    for (const QJsonValue& v : cpl["complaints"].toArray())
+        if (v.toObject()["text"].toString() == "flood no chat geral") foundCp = true;
+    CHECK(foundCp, "reclamação visível na lista (admin)");
+    QJsonObject cpc = HProto::msg("complaint_clear");
+    D.send(cpc);
+    QJsonObject ccl = D.waitFor("complaint_cleared");
+    CHECK(ccl["t"].toString() == "complaint_cleared", "reclamações limpas (admin)");
+
+    // 56-58) sussurro: D sussurra só para C2; E2 (mesmo canal) NÃO ouve, C2 ouve
+    {
+        QJsonObject wh = HProto::msg("whisper");
+        QJsonArray ids2; ids2 << idC2;
+        wh["ids"] = ids2;
+        D.send(wh);
+        QJsonObject wo = D.waitFor("whisper_ok");
+        CHECK(wo["count"].toInt() == 1, "whisper definido (1 alvo)");
+    }
+    {
+        // E2 recebeu token no seu welcome? Não guardamos: pedir voice_token
+        if (!E2.token) {
+            E2.send(HProto::msg("voice_hello"));
+            QJsonObject vt = E2.waitFor("voice_token");
+            E2.token = vt["token"].toString().toUInt();
+        }
+        // registrar endpoints UDP de E2 e C2 (pacote vazio)
+        C2.udp.bind(0); E2.udp.bind(0);
+        C2.udp.writeDatagram(HProto::encodeVoiceClient(C2.token, 1, QByteArray()), QHostAddress(host), port);
+        E2.udp.writeDatagram(HProto::encodeVoiceClient(E2.token, 1, QByteArray()), QHostAddress(host), port);
+        QElapsedTimer s2; s2.start();
+        while (s2.elapsed() < 250) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        // D fala (payload fake); espera-se: C2 recebe, E2 não
+        QByteArray opusFake2(120, 0); opusFake2.fill(0x55);
+        D.udp.bind(0);
+        D.udp.writeDatagram(HProto::encodeVoiceClient(D.token, 7, opusFake2), QHostAddress(host), port);
+        bool c2got = false, e2got = false;
+        QElapsedTimer t3; t3.start();
+        while (t3.elapsed() < 1500) {
+            while (C2.udp.hasPendingDatagrams()) { C2.udp.receiveDatagram(); c2got = true; }
+            while (E2.udp.hasPendingDatagrams()) { E2.udp.receiveDatagram(); e2got = true; }
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        }
+        CHECK(c2got, "sussurro: C2 (alvo) recebeu a voz");
+        CHECK(!e2got, "sussurro: E2 (mesmo canal, não-alvo) NÃO recebeu");
+        // limpa sussurro de D
+        QJsonObject wh = HProto::msg("whisper"); wh["ids"] = QJsonArray();
+        D.send(wh); D.waitFor("whisper_ok");
+    }
+
+    // 59-62) arquivos: D envia arquivo ao canal padrão; C2 lista; E2 baixa; D exclui
+    QByteArray fdata(4096, 0);
+    for (int i = 0; i < fdata.size(); ++i) fdata[i] = char(i * 3);
+    QJsonObject fu = HProto::msg("ft_upload");
+    fu["channel"] = 1; fu["name"] = "teste v3.txt";
+    fu["data"] = QString::fromLatin1(fdata.toBase64());
+    D.send(fu);
+    QJsonObject fup = D.waitFor("ft_uploaded");
+    CHECK(fup["name"].toString() == "teste v3.txt", "ft_upload confirmado");
+    QJsonObject fl = HProto::msg("ft_list"); fl["channel"] = 1;
+    C2.send(fl);
+    QJsonObject flr = C2.waitFor("ft_list");
+    bool foundFile = false;
+    for (const QJsonValue& v : flr["files"].toArray())
+        if (v.toObject()["name"].toString() == "teste v3.txt") foundFile = true;
+    CHECK(foundFile, "ft_list mostra o arquivo");
+    QJsonObject fd = HProto::msg("ft_download");
+    fd["channel"] = 1; fd["name"] = "teste v3.txt";
+    E2.send(fd);
+    QJsonObject fdd = E2.waitFor("ft_data");
+    CHECK(QByteArray::fromBase64(fdd["data"].toString().toLatin1()) == fdata,
+          "ft_download: conteúdo idêntico");
+    QJsonObject fdel = HProto::msg("ft_delete");
+    fdel["channel"] = 1; fdel["name"] = "teste v3.txt";
+    D.send(fdel);
+    QJsonObject fdr = D.waitFor("ft_deleted");
+    CHECK(fdr["t"].toString() == "ft_deleted", "ft_delete pelo uploader");
+
+    // 63-64) operador de canal: E2 criou o canal "NaoPode" (é op lá, mas NÃO é admin)
+    //        -> pode expulsar gente DAQUELE canal; não pode expulsar do servidor
+    int nopChan = 0;
+    {
+        // descobre o id do canal "NaoPode" via lista do próprio welcome de E2? usar group_list não.
+        // E2 criou; o chan_update foi visto por D, mas E2 recebeu o dela também:
+        QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 2000 && !nopChan) {
+            QJsonObject cu = E2.waitFor("chan_update", 300);
+            if (cu["chan"].toObject()["name"].toString() == "NaoPode")
+                nopChan = cu["chan"].toObject()["id"].toInt();
+        }
+    }
+    if (nopChan) {
+        // A3 entra no canal de E2 (A3 está no canal padrão — sem senha no NaoPode)
+        QJsonObject mvA = HProto::msg("move"); mvA["channel"] = nopChan;
+        A3.send(mvA);
+        QJsonObject mvE = HProto::msg("move"); mvE["channel"] = nopChan;
+        E2.send(mvE);
+        A3.waitFor("user_moved", 800);
+        QJsonObject kck = HProto::msg("kick");
+        kck["id"] = A3.id; kck["from"] = "channel"; kck["reason"] = "regra do canal";
+        E2.send(kck);
+        bool backAgain = false; QElapsedTimer tw2; tw2.start();
+        while (tw2.elapsed() < 3000 && !backAgain) {
+            QJsonObject m = A3.waitFor("user_moved", 400);
+            if (m["id"].toInt() == A3.id && m["channel"].toInt() == 1) backAgain = true;
+        }
+        CHECK(backAgain, "operador expulsa do próprio canal sem ser admin");
+        QJsonObject ksv = HProto::msg("kick");
+        ksv["id"] = A3.id; ksv["from"] = "server";
+        E2.send(ksv);
+        QJsonObject ksvErr = E2.waitFor("error");
+        CHECK(ksvErr["code"].toString() == "no_permission",
+              "operador NÃO expulsa do servidor");
+    } else {
+        CHECK(false, "operador (canal NaoPode não encontrado)");
+    }
+
     printf("\n=== Resultado: %d OK, %d falhas ===\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

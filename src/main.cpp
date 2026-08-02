@@ -78,7 +78,7 @@ int main(int argc, char* argv[]) {
     core.setAdminPassword(adminPassword);
     core.setPrivilegeKeys(privKeys);
     core.setPrivilegeKeyReuse(privKeyReuse);
-    core.setVersion(QStringLiteral("2.0.0"));
+    core.setVersion(QStringLiteral("3.0.0"));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
 

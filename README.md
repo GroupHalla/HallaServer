@@ -28,6 +28,18 @@ Servidor de voz e chat auto-hospedável da família Halla — seu próprio
 - **Persistência**: canais, grupos, atribuições, chaves usadas e registro
   de identidades salvos em `halla-data.json`; temporários somem quando
   ficam vazios
+- **Avatares** (v3): enviados pelos clientes, guardados por UID no disco e
+  distribuídos a quem pedir
+- **Mensagens offline** (v3): caixa postal por UID — quem estava ausente
+  recebe as mensagens ao conectar
+- **Reclamações** (v3): usuários registram queixas sobre outros; admins
+  listam e limpam via protocolo
+- **Operadores de canal** (v3): quem cria um canal gerencia o próprio canal
+  (editar e expulsar dele) — o "channel admin" do TeamSpeak
+- **Sussurro** (v3): o cliente direciona a própria voz a uma lista de
+  usuários, independente dos canais
+- **Transferência de arquivos por canal** (v3): upload/download/exclusão de
+  arquivos por canal, persistidos no disco do servidor
 - **Multi-plataforma**: Linux e Windows (64-bit)
 
 Feito para ser usado com o cliente **[Halla](https://github.com/farleybarbosa320-oss/Halla)**,
@@ -39,14 +51,14 @@ qualquer linguagem (JSON sobre TCP + UDP para voz).
 ### Linux
 
 ```bash
-tar xf halla-server-2.0.0-linux-x64.tar.gz
+tar xf halla-server-3.0.0-linux-x64.tar.gz
 cd halla-server
 ./halla-server --config halla-server.ini
 ```
 
 ### Windows
 
-Baixe `halla-server-2.0.0-win64.zip`, extraia e execute:
+Baixe `halla-server-3.0.0-win64.zip`, extraia e execute:
 
 ```
 halla-server.exe
@@ -110,9 +122,10 @@ cmake --build build-win
 
 ## Testes
 
-O repositório inclui o `halla-nettest`, que sobe dois clientes simulados e
-valida **23 cenários** do protocolo (login, chat, canais, poke, permissões,
-relay de voz, ban…):
+O repositório inclui o `halla-nettest`, que sobe vários clientes simulados e
+valida **71 cenários** do protocolo (login, chat, canais, poke, permissões,
+relay de voz, ban/listas, grupos, operadores de canal, avatares, mensagens
+offline, reclamações, sussurro e transferência de arquivos…):
 
 ```bash
 ./build/halla-server --port 9987 &
