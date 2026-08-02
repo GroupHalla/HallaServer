@@ -1,0 +1,144 @@
+name: Build and Release Server
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Server
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-qt6-base
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build -G "Ninja" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH="/mingw64" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Server
+        shell: msys2 {0}
+        run: |
+          cmake --build build
+
+      - name: Prepare Package
+        shell: msys2 {0}
+        run: |
+          mkdir -p dist/HallaServer
+          cp build/halla-server.exe dist/HallaServer/
+          cp halla-server.ini dist/HallaServer/
+          
+          # Deploy Qt dependencies
+          windeployqt --release --no-translations --no-compiler-runtime --dir dist/HallaServer dist/HallaServer/halla-server.exe
+          
+          # Copy MinGW runtime DLLs
+          cp /mingw64/bin/libgcc_s_seh-1.dll dist/HallaServer/
+          cp /mingw64/bin/libstdc++-6.dll dist/HallaServer/
+          cp /mingw64/bin/libwinpthread-1.dll dist/HallaServer/
+          
+          # Copy extra dependencies
+          cp /mingw64/bin/libdouble-conversion.dll dist/HallaServer/ || true
+          cp /mingw64/bin/libpcre2-16.dll dist/HallaServer/ || true
+          cp /mingw64/bin/libzstd.dll dist/HallaServer/ || true
+
+      - name: Zip Windows Release
+        run: |
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.0-win64.zip
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: halla-server-windows
+          path: halla-server-3.2.0-win64.zip
+
+  build-linux:
+    name: Build Linux Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools build-essential
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Server
+        run: |
+          cmake --build build
+
+      - name: Prepare Package
+        run: |
+          mkdir -p halla-server-linux
+          cp build/halla-server halla-server-linux/
+          cp halla-server.ini halla-server-linux/
+          tar -czf halla-server-3.2.0-linux-x64.tar.gz halla-server-linux/
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: halla-server-linux
+          path: halla-server-3.2.0-linux-x64.tar.gz
+
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: halla-server-windows
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: halla-server-linux
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v3.2.0
+          name: Halla Server 3.2.0 — Cargos e Limpeza de Marca
+          draft: false
+          prerelease: false
+          files: |
+            halla-server-3.2.0-win64.zip
+            halla-server-3.2.0-linux-x64.tar.gz
+          body: |
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.0
+
+            Esta release traz as atualizações estruturais e aprimoramentos de sincronia de cargos/grupos para acompanhar o lançamento do cliente Halla v3.13.11!
+
+            ### 🏷️ Suporte a Metadados de Grupos e Cargos (Sigla, Order, Icon)
+            * **Sincronia Completa de Cargos:** Expandimos a estrutura `GroupDef` no banco de dados e protocolo. O servidor agora transmite as propriedades `sigla` (ex: `[Mod]`), `order` (ordem de classificação hierárquica) e `icon` diretamente para os clientes conectados.
+            * **Exibição Hierárquica:** O cliente Halla agora renderiza essas siglas automaticamente antes do apelido dos membros (ex: `[Mod] Farley Barbosa`) para identificação imediata da equipe do servidor!
+
+            ### 🧹 Limpeza Geral de Marcas e Nomes de Terceiros
+            * **Identidade Exclusiva:** Realizamos uma varredura rigorosa em todos os fontes do servidor (`ServerQuery`, `ServerV3`, `main.cpp`), protocolos e documentações, eliminando qualquer menção ou sigla a softwares de terceiros. O Halla Server agora se apresenta com identidade visual e textual limpa, original e completamente independente!
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
