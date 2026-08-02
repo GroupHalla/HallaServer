@@ -23,6 +23,8 @@ public:
     QString platform() const { return m_platform; }
     QString description() const { return m_desc; }
     QString group() const { return m_group; }
+    int groupId() const { return m_groupId; }
+    QHostAddress ip() const;
 
     bool micMuted() const { return m_micMuted; }
     bool spkMuted() const { return m_spkMuted; }
@@ -42,7 +44,11 @@ public:
 
     void setName(const QString& n)          { m_name = n; }
     void setDescription(const QString& d)   { m_desc = d; }
+    void setUid(const QString& u)           { m_uid = u; }
+    void setVersion(const QString& v)       { m_version = v; }
+    void setPlatform(const QString& p)      { m_platform = p; }
     void setGroup(const QString& g)         { m_group = g; }
+    void setGroupId(int g)                  { m_groupId = g; }
     void setMicMuted(bool v)                { m_micMuted = v; }
     void setSpkMuted(bool v)                { m_spkMuted = v; }
     void setAway(bool v)                    { m_away = v; }
@@ -77,6 +83,7 @@ private:
     QString m_platform;
     QString m_desc;
     QString m_group = "normal";
+    int m_groupId = 2;
     bool m_micMuted = false;
     bool m_spkMuted = false;
     bool m_away = false;

@@ -4,3 +4,8 @@
 *.user
 .vscode/
 .idea/
+
+# artefatos de release
+/dist-pkg/
+/halla-server-*-win64.zip
+/halla-server-*-linux-x64.tar.gz

@@ -253,6 +253,315 @@ int main(int argc, char* argv[]) {
     QJsonObject left = A.waitFor("user_left", 3000);
     CHECK(left["id"].toInt() == B.id, "A viu B sair");
 
+    // ==================================================================
+    //  CENÁRIO 3 (protocolo v2): permissões granulares, grupos, banlist,
+    //  chaves de uso único, senha de canal, talk power, persistência.
+    // ==================================================================
+    const QString uidAStr = QString::fromLatin1(uidA.toBase64());
+
+    // 24) welcome v2 traz grupos e myPerms
+    CHECK(w["groups"].toArray().size() >= 3 && w.contains("myPerms"),
+          "welcome v2 traz grupos + myPerms");
+
+    // 25) group_list requisitado explicitamente
+    A.send(HProto::msg("group_list"));
+    QJsonObject gl = A.waitFor("group_list");
+    CHECK(gl["groups"].toArray().size() >= 3, "group_list com >= 3 grupos");
+
+    // 26) C entra como admin (adminPassword do INI)
+    FakeClient C("Carol");
+    CHECK(C.connectTo(host, port), "C conecta ao TCP");
+    hello = HProto::msg("hello");
+    hello["proto"] = HProto::kProtoVersion;
+    hello["uid"] = "uid-carol-000000000000000000=";
+    hello["nick"] = "Carol";
+    hello["adminPass"] = "troque-esta-senha";
+    C.send(hello);
+    QJsonObject wc = C.waitFor("welcome");
+    C.id = wc["selfId"].toInt();
+    C.token = wc["voice"].toObject()["token"].toString().toUInt();
+    CHECK(wc["myPerms"].toObject()["*"].toBool(), "admin entra com adminPass (perms *)");
+
+    // 27) ban: C bane A (A recebe kicked com ban=true)
+    // nota: A já tinha um "kicked" ANTIGO na caixa (kick de canal da v1) —
+    // filtrar até chegar o com ban=true
+    QJsonObject banA = HProto::msg("ban");
+    banA["id"] = A.id; banA["reason"] = "teste de ban v2"; banA["minutes"] = 0;
+    C.send(banA);
+    {
+        bool gotBanKick = false;
+        QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !gotBanKick) {
+            QJsonObject k = A.waitFor("kicked", 400);
+            if (k["ban"].toBool()) gotBanKick = true;
+        }
+        CHECK(gotBanKick, "A recebeu kicked (ban=true)");
+    }
+    A.tcp.waitForDisconnected(1500);
+
+    // 28) A tenta reconectar com o mesmo UID -> banned
+    FakeClient A2("Alice");
+    A2.connectTo(host, port);
+    hello["uid"] = uidAStr; hello["nick"] = "Alice"; hello["adminPass"] = "";
+    A2.send(hello);
+    QJsonObject e = A2.waitFor("error");
+    CHECK(e["code"].toString() == "banned", "UID banido não reconecta");
+
+    // 29) banlist: C vê o ban de A (por uid)
+    C.send(HProto::msg("banlist"));
+    QJsonObject bl = C.waitFor("banlist");
+    bool foundBan = false;
+    for (const QJsonValue& v : bl["bans"].toArray())
+        if (v.toObject()["uid"].toString() == uidAStr) foundBan = true;
+    CHECK(foundBan, "banlist contém o UID banido");
+
+    // 30) unban: C remove o ban; A reconecta com sucesso
+    QJsonObject un = HProto::msg("unban");
+    un["uid"] = uidAStr;
+    C.send(un);
+    QJsonObject br = C.waitFor("ban_removed");
+    CHECK(br["uid"].toString() == uidAStr, "unban confirmado (ban_removed)");
+    FakeClient A3("Alice");
+    A3.connectTo(host, port);
+    A3.send(hello);
+    QJsonObject wa3 = A3.waitFor("welcome");
+    CHECK(wa3["selfId"].toInt() > 0, "reconexão OK após unban");
+    A3.id = wa3["selfId"].toInt();
+
+    // 31) D entra (normal) e usa chave de privilégio -> admin
+    FakeClient D("Dave");
+    D.connectTo(host, port);
+    hello["uid"] = "uid-dave-0000000000000000000=";
+    hello["nick"] = "Dave";
+    D.send(hello);
+    QJsonObject wd = D.waitFor("welcome");
+    D.id = wd["selfId"].toInt();
+    D.token = wd["voice"].toObject()["token"].toString().toUInt();
+    QJsonObject useKey = HProto::msg("privkey");
+    useKey["key"] = "HL3-DDDD-EEEE-FFFF";
+    D.send(useKey);
+    {
+        bool became = false;
+        QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !became) {
+            QJsonObject g = D.waitFor("user_group", 400);
+            if (g["id"].toInt() == D.id && g["group"].toString() == "admin") became = true;
+        }
+        CHECK(became, "chave de privilégio (2ª) vira admin");
+    }
+
+    // 32) MESMA chave de novo -> privkey_used (uso único persistente)
+    FakeClient E("Eve");
+    E.connectTo(host, port);
+    hello["uid"] = "uid-eve-00000000000000000000=";
+    hello["nick"] = "Eve";
+    E.send(hello);
+    QJsonObject we = E.waitFor("welcome");
+    E.id = we["selfId"].toInt();
+    E.send(useKey);
+    QJsonObject keyErr = E.waitFor("error");
+    CHECK(keyErr["code"].toString() == "privkey_used",
+          "chave de uso único rejeitada na 2ª vez");
+
+    // 33) chave com grupo alvo (@normal): vira normal, não admin
+    FakeClient F("Fred");
+    F.connectTo(host, port);
+    hello["uid"] = "uid-fred-0000000000000000000=";
+    hello["nick"] = "Fred";
+    F.send(hello);
+    F.waitFor("welcome");
+    QJsonObject keyN = HProto::msg("privkey");
+    keyN["key"] = "HL3-CONV-1234-5678";
+    F.send(keyN);
+    {
+        bool normalKey = false, noErr = true;
+        QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 2500) {
+            QJsonObject g = F.waitFor("user_group", 300);
+            if (g.isEmpty()) break;
+            if (g["group"].toString() == "normal") normalKey = true;
+        }
+        CHECK(normalKey, "chave @normal concede grupo normal (não admin)");
+    }
+
+    // 34-36) canal com senha: entra só com a senha certa; admin ignora
+    QJsonObject mkpw = HProto::msg("chan_create");
+    mkpw["name"] = "Camarote"; mkpw["type"] = 0; mkpw["pass"] = "segredo123";
+    mkpw["codec"] = 4; mkpw["quality"] = 6; mkpw["max"] = -1;
+    D.send(mkpw); // D é admin
+    QJsonObject chU = A3.waitFor("chan_update");
+    const int pwChan = chU["chan"].toObject()["id"].toInt();
+    CHECK(pwChan > 1, "canal com senha criado");
+    QJsonObject jmv = HProto::msg("move");
+    jmv["channel"] = pwChan;
+    E.send(jmv); // sem senha
+    QJsonObject passErr = E.waitFor("error");
+    CHECK(passErr["code"].toString() == "bad_channel_pass",
+          "entrar sem senha -> bad_channel_pass");
+    jmv["pass"] = "segredo123";
+    E.send(jmv);
+    {
+        bool inChan = false; QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !inChan) {
+            QJsonObject m = A3.waitFor("user_moved", 400);
+            if (m["id"].toInt() == E.id && m["channel"].toInt() == pwChan) inChan = true;
+        }
+        CHECK(inChan, "entrou com a senha correta");
+    }
+    {
+        // D (admin) entra SEM informar a senha
+        QJsonObject mv2 = HProto::msg("move");
+        mv2["channel"] = pwChan;
+        D.send(mv2);
+        bool inChan = false; QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !inChan) {
+            QJsonObject m = A3.waitFor("user_moved", 400);
+            if (m["id"].toInt() == D.id && m["channel"].toInt() == pwChan) inChan = true;
+        }
+        CHECK(inChan, "admin entra sem senha (ignoreChanPass)");
+    }
+
+    // 37-38) talk power: canal moderado com ntalk=60
+    QJsonObject chEd = HProto::msg("chan_edit");
+    chEd["id"] = pwChan; chEd["moderated"] = true; chEd["ntalk"] = 60;
+    D.send(chEd);
+    {
+        QJsonObject upd = A3.waitFor("chan_update");
+        CHECK(upd["chan"].toObject()["ntalk"].toInt() == 60, "canal editado (moderado, ntalk=60)");
+    }
+    QJsonObject tk = HProto::msg("talking");
+    tk["on"] = true;
+    E.send(tk); // E é normal (talkPower 25) < 60
+    QJsonObject talkErr = E.waitFor("error");
+    CHECK(talkErr["code"].toString() == "no_talk_power",
+          "talk power insuficiente -> no_talk_power");
+    D.send(tk); // D admin (75) ok
+    {
+        bool sawTalk = false; QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 2500 && !sawTalk) {
+            QJsonObject u = E.waitFor("user_state", 400);
+            if (u["id"].toInt() == D.id && u["talking"].toBool()) sawTalk = true;
+        }
+        CHECK(sawTalk, "admin fala no canal moderado (user_state visto)");
+        D.send(HProto::msg("talking")); D.waitFor("user_group", 200);
+        QJsonObject tkOff = HProto::msg("talking"); tkOff["on"] = false; D.send(tkOff);
+    }
+
+    // 39-40) move_other: quem não pode não move; admin move
+    QJsonObject mo = HProto::msg("move_other");
+    mo["id"] = D.id; mo["channel"] = 1;
+    E.send(mo);
+    QJsonObject moErr = E.waitFor("error");
+    CHECK(moErr["code"].toString() == "no_permission", "normal não move outros");
+    D.send(mo); // D admin move E? não — move D... mover E para o padrão
+    mo["id"] = E.id;
+    D.send(mo);
+    {
+        bool moved = false; QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !moved) {
+            QJsonObject m = E.waitFor("user_moved", 400);
+            if (m["id"].toInt() == E.id && m["channel"].toInt() == 1) moved = true;
+        }
+        CHECK(moved, "admin moveu outro cliente (move_other)");
+    }
+
+    // 41-42) atribuição de grupo por UID persiste após reconexão
+    A3.send(HProto::msg("group_list")); // drena A3
+    QJsonObject asg = HProto::msg("client_set_group");
+    asg["id"] = E.id; asg["gid"] = 1; // E -> guest
+    D.send(asg);
+    {
+        bool guestNow = false; QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !guestNow) {
+            QJsonObject g = E.waitFor("user_group", 400);
+            if (g["id"].toInt() == E.id && g["group"].toString() == "guest") guestNow = true;
+        }
+        CHECK(guestNow, "client_set_group online -> guest");
+    }
+    E.send(HProto::msg("quit"));
+    E.tcp.waitForDisconnected(1500);
+    FakeClient E2("Eve");
+    E2.connectTo(host, port);
+    hello["uid"] = "uid-eve-00000000000000000000="; hello["nick"] = "Eve";
+    E2.send(hello);
+    QJsonObject we2 = E2.waitFor("welcome");
+    E2.id = we2["selfId"].toInt();
+    CHECK(we2["myPerms"].toObject()["talkPower"].toInt() == 10,
+          "atribuição por UID persiste (reconectou como guest, talkPower 10)");
+
+    // 43) guest NÃO pode criar canal (sem chanCreateTemp)
+    QJsonObject mk2 = HProto::msg("chan_create");
+    mk2["name"] = "NaoPode"; mk2["type"] = 0; mk2["codec"] = 4;
+    E2.send(mk2);
+    QJsonObject mkErr = E2.waitFor("error");
+    CHECK(mkErr["code"].toString() == "no_permission", "guest não cria canal");
+
+    // 44) anti-lockout: não remover "*" do grupo admin
+    QJsonObject gs = HProto::msg("group_set");
+    gs["id"] = 3; gs["perms"] = QJsonObject{{"poke", true}};
+    D.send(gs);
+    QJsonObject lockErr = D.waitFor("error");
+    CHECK(lockErr["code"].toString() == "locked", "anti-lockout do grupo admin (*)");
+
+    // 45-46) grupo customizado "vip" + atribuição
+    QJsonObject mkG = HProto::msg("group_set");
+    mkG["name"] = "vip";
+    mkG["perms"] = QJsonObject{{"poke", true}, {"privmsg", true},
+                               {"chanCreateTemp", true}, {"talkPower", 40}};
+    D.send(mkG);
+    int vipId = 0;
+    {
+        QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !vipId) {
+            QJsonObject l = E2.waitFor("group_list", 400);
+            for (const QJsonValue& v : l["groups"].toArray())
+                if (v.toObject()["name"].toString() == "vip")
+                    vipId = v.toObject()["id"].toInt();
+        }
+        CHECK(vipId >= 100, "grupo customizado 'vip' criado (id>=100)");
+    }
+    QJsonObject asg2 = HProto::msg("client_set_group");
+    asg2["id"] = E2.id; asg2["gid"] = vipId;
+    D.send(asg2);
+    {
+        bool vipNow = false; QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !vipNow) {
+            QJsonObject g = E2.waitFor("user_group", 400);
+            if (g["id"].toInt() == E2.id && g["group"].toString() == "vip") vipNow = true;
+        }
+        CHECK(vipNow, "E2 atribuída ao grupo vip");
+    }
+    E2.send(mk2); // vip TEM chanCreateTemp
+    {
+        // filtrar: D tem chan_updates antigos ("Camarote", edição) na caixa
+        bool created = false;
+        QElapsedTimer tw; tw.start();
+        while (tw.elapsed() < 3000 && !created) {
+            QJsonObject cu2 = D.waitFor("chan_update", 400);
+            if (cu2["chan"].toObject()["name"].toString() == "NaoPode") created = true;
+        }
+        CHECK(created, "vip cria canal temporário (permissão granular)");
+    }
+
+    // 47) server_edit: muda nome e propaga a todos
+    QJsonObject se = HProto::msg("server_edit");
+    se["name"] = "Halla v2 Teste";
+    D.send(se);
+    QJsonObject seb = E2.waitFor("server_edit");
+    CHECK(seb["name"].toString() == "Halla v2 Teste", "server_edit propaga novo nome");
+
+    // 48) group_set exige groupEdit: E2 (vip) não gerencia grupos
+    QJsonObject gs2 = HProto::msg("group_set");
+    gs2["name"] = "hax";
+    E2.send(gs2);
+    QJsonObject ge2 = E2.waitFor("error");
+    CHECK(ge2["code"].toString() == "no_permission", "sem groupEdit não cria grupo");
+
+    // 49) banlist exige banList: E2 não lista bans
+    E2.send(HProto::msg("banlist"));
+    QJsonObject blErr = E2.waitFor("error");
+    CHECK(blErr["code"].toString() == "no_permission", "sem banList não vê banlist");
+
     printf("\n=== Resultado: %d OK, %d falhas ===\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

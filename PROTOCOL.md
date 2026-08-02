@@ -1,4 +1,4 @@
-# Halla Protocol v1
+# Halla Protocol v1 + v2
 
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes/bots compatíveis.
@@ -19,7 +19,7 @@ codificados em UTF-8.
 
 | Mensagem | Campos | Descrição |
 |---|---|---|
-| `hello` | `proto`, `uid`, `nick`, `pass?`, `adminPass?`, `ver`, `platform` | Login. `proto` = 1 |
+| `hello` | `proto`, `uid`, `nick`, `pass?`, `adminPass?`, `ver`, `platform` | Login. `proto` = 1 ou 2 |
 | `ping` | `ts` | Medição de latência (resposta `pong` com mesmo `ts`) |
 | `chat` | `scope` (`server`/`channel`/`private`), `to?`, `text` | Envia mensagem de chat |
 | `move` | `channel`, `pass?` | Trocar de canal |
@@ -109,3 +109,103 @@ O servidor nunca decodifica Opus — é um relay puro (baixíssima latência e C
 
 Grupos são atribuídos via `adminPass` no `hello` ou mensagem `privkey` válida
 (chaves configuradas no `halla-server.ini`).
+
+---
+
+# Halla Protocol v2 (Cenário 3)
+
+A versão 2 adiciona **permissões granulares por grupo**, **grupos atribuídos por
+identidade (UID)**, **lista de banimentos**, **chaves de privilégio com grupo
+alvo e uso único** e **poder de fala (talk power)**.
+
+O servidor aceita clientes v1 e v2 (`kProtoMin = 1`, `kProtoVersion = 2`).
+Recursos novos só existem para quem fala v2.
+
+## Grupos e permissões
+
+Cada cliente pertence a **um grupo de servidor**. Grupos embutidos:
+
+| id | nome | permissões padrão |
+|---|---|---|
+| 1 | `guest` | `poke`, `privmsg`, talkPower 10 |
+| 2 | `normal` | guest + `chanCreateTemp`, talkPower 25 |
+| 3 | `admin` | `*` (tudo), talkPower 75 |
+
+Grupos customizados têm id >= 100 e são persistidos no `halla-data.json`.
+
+### Chaves de permissão
+
+| Chave | Efeito |
+|---|---|
+| `*` | Todas as permissões (super-admin) |
+| `kick` | Expulsar clientes do canal/servidor |
+| `ban` | Banir e desbanir |
+| `banList` | Ver a lista de banimentos |
+| `move` | Mover outros clientes de canal (`move_other`) |
+| `chanCreateTemp` / `chanCreateSemi` / `chanCreatePerm` | Criar canais por tipo |
+| `chanEdit` / `chanDelete` | Editar/excluir canais |
+| `serverEdit` | Editar nome/MOTD do servidor |
+| `groupEdit` | Criar/editar/excluir grupos e atribuir grupos a clientes |
+| `poke` | Cutucar |
+| `privmsg` | Mensagem privada |
+| `ignoreChanPass` | Entrar em canais com senha sem digitá-la |
+| `ignoreTalkPower` | Falar em canais moderados sem talk power |
+| `talkPower` | (número) poder de fala do grupo |
+
+Regras especiais do servidor:
+- Não-administrador (`*`) **não** pode expulsar/banir um administrador (`*`).
+- Não é possível remover `*` de um grupo que o possui (anti-lockout).
+- Só quem tem `*` cria/atribui grupos com `*`.
+- Grupos embutidos (1–3) não podem ser excluídos.
+
+## Mensagens novas (v2)
+
+### Cliente → Servidor
+
+| Mensagem | Campos | Permissão | Descrição |
+|---|---|---|---|
+| `banlist` | — | `banList` | Pede a lista de banimentos |
+| `unban` | `uid` | `ban` | Remove banimento por UID |
+| `move_other` | `id`, `channel` | `move` | Move outro cliente de canal |
+| `group_list` | — | nenhuma | Lista grupos e permissões |
+| `group_set` | `id?`, `name?`, `perms?` | `groupEdit` | Cria (sem `id`) ou edita grupo |
+| `group_delete` | `id` | `groupEdit` | Exclui grupo custom (id>=100) |
+| `client_set_group` | `id?` ou `uid?`, `gid` | `groupEdit` | Atribui grupo (persistente por UID) |
+| `server_edit` | `name?`, `motd?` | `serverEdit` | Renomeia servidor / muda MOTD |
+
+`privkey` agora aceita chaves com grupo alvo (no INI: `CHAVE@grupo`) e, por
+padrão, **cada chave só pode ser usada uma vez** (`privilegeKeyReuse = false`
+no INI desativa). A chave registrada fica associada ao UID para sempre.
+
+### Servidor → Cliente
+
+| Mensagem | Campos | Descrição |
+|---|---|---|
+| `welcome` | + `groups:[{id,name,perms}]`, `myPerms:{…}`, `proto` | v2 inclui grupos e suas permissões |
+| `banlist` | `bans:[{uid,ip,name,reason,expires?}]` | Resposta ao pedido |
+| `ban_removed` | `uid` | Banimento removido |
+| `user_group` | `id`, `group`, `gid` | Agora inclui o id numérico do grupo |
+| `group_list` | `groups:[…]` | Broadcast quando grupos mudam |
+| `server_edit` | `name`, `motd` | Nome/MOTD mudaram em tempo real |
+| `error` | `code` = `privkey_used`, `locked`, `no_talk_power`, `not_found`, `bad_uid` | Novos códigos |
+
+## Poder de fala (talk power)
+
+Canais têm o campo `ntalk` (0..100). Regra do servidor:
+
+```
+need = ntalk > 0 ? ntalk : (moderated ? 25 : 0)
+pode falar = need == 0  ou  talkPower(cliente) >= need  ou  ignoreTalkPower
+```
+
+Se o cliente não pode falar, o servidor **responde `no_talk_power`** ao
+`talking=on` e **descarta seus pacotes de voz** (ninguém mais ouve).
+
+## Identidade (UID)
+
+O `uid` do `hello` é **obrigatório** (erro `bad_uid`). O servidor mantém um
+registro persistente (`halla-data.json` → `clients`) com nome, primeira e
+última conexão, usado para:
+- Bans por UID (e por IP, adicionado na v2);
+- Atribuições de grupo (`assignments`: uid → gid), aplicadas a cada login;
+- Chaves de privilégio conferem grupo permanentemente ao UID.

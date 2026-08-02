@@ -11,12 +11,23 @@ Servidor de voz e chat auto-hospedável da família Halla — seu próprio
 - **Chat**: servidor, canal e privado (com BBCode no cliente)
 - **Cutucar (poke)**, estados (mic mudo, fones mudos, ausente, gravando,
   comandante), indicador "está falando" em tempo real
-- **Permissões por grupos**: convidado / normal / admin — senha de admin e
-  chaves de privilégio configuráveis
+- **Permissões granulares por grupo** (v2 — Cenário 3): cada grupo é um
+  conjunto de permissões (kick, ban, banList, mover outros, criar/editar/
+  excluir canais por tipo, editar servidor, gerenciar grupos, poke,
+  ignorar senha de canal, talk power...). Grupos embutidos: convidado,
+  normal, admin — e **grupos customizados** criados via protocolo.
+- **Grupos atribuídos por identidade (UID)**: a atribuição é permanente
+  (persistente em `halla-data.json`), inclusive para clientes offline
+- **Poder de fala (talk power)**: canais moderados exigem poder mínimo;
+  quem não tem, não fala (voz nem é retransmitida)
+- **Chaves de privilégio aprimoradas**: `CHAVE@grupo` no INI e uso único
+  por padrão (`privilegeKeyReuse = true` para reutilizá-las)
 - **Moderação**: kick de canal/servidor, banimento temporário ou permanente
-  (persistente em `halla-bans.json`)
-- **Persistência**: canais salvos em `halla-data.json`; temporários somem
-  quando ficam vazios
+  por UID **e** IP, lista de banidos via protocolo (`banlist`/`unban`),
+  tudo persistente em `halla-bans.json`
+- **Persistência**: canais, grupos, atribuições, chaves usadas e registro
+  de identidades salvos em `halla-data.json`; temporários somem quando
+  ficam vazios
 - **Multi-plataforma**: Linux e Windows (64-bit)
 
 Feito para ser usado com o cliente **[Halla](https://github.com/farleybarbosa320-oss/Halla)**,
@@ -28,14 +39,14 @@ qualquer linguagem (JSON sobre TCP + UDP para voz).
 ### Linux
 
 ```bash
-tar xf halla-server-1.0.0-linux-x64.tar.gz
+tar xf halla-server-2.0.0-linux-x64.tar.gz
 cd halla-server
 ./halla-server --config halla-server.ini
 ```
 
 ### Windows
 
-Baixe `halla-server-1.0.0-win64.zip`, extraia e execute:
+Baixe `halla-server-2.0.0-win64.zip`, extraia e execute:
 
 ```
 halla-server.exe

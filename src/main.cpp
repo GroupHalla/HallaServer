@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     g_app = &app;
     QCoreApplication::setApplicationName("Halla Server");
-    QCoreApplication::setApplicationVersion("1.0.0");
+    QCoreApplication::setApplicationVersion("2.0.0");
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -65,6 +65,7 @@ int main(int argc, char* argv[]) {
     QStringList privKeys = cfg.value("privilegeKeys").toStringList();
     for (QString& k : privKeys) k = k.trimmed();
     privKeys.removeAll(QString());
+    const bool privKeyReuse = cfg.value("privilegeKeyReuse", false).toBool();
     cfg.endGroup();
 
     const QString dir = QFileInfo(configPath).absolutePath();
@@ -76,6 +77,8 @@ int main(int argc, char* argv[]) {
     core.setPassword(password);
     core.setAdminPassword(adminPassword);
     core.setPrivilegeKeys(privKeys);
+    core.setPrivilegeKeyReuse(privKeyReuse);
+    core.setVersion(QStringLiteral("2.0.0"));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
 

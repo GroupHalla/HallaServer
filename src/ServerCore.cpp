@@ -14,9 +14,12 @@ ServerCore::ServerCore(QObject* parent) : QObject(parent) {
     m_idleTimer = new QTimer(this);
     m_idleTimer->setInterval(5000);
     connect(m_idleTimer, &QTimer::timeout, this, &ServerCore::checkIdleClients);
+    setupBuiltinGroups();
 }
 
 ServerCore::~ServerCore() {
+    saveData();
+    saveBans();
     qDeleteAll(m_clients);
 }
 
@@ -37,7 +40,8 @@ bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
     if (!m_voice->bind(voicePort)) return false;
 
     m_idleTimer->start();
-    log(QStringLiteral("Servidor \"%1\" iniciado (slots: %2)").arg(m_name).arg(m_maxClients));
+    log(QStringLiteral("Servidor \"%1\" v%2 iniciado (slots: %3, protocolo v%4)")
+            .arg(m_name, m_version).arg(m_maxClients).arg(HProto::kProtoVersion));
     return true;
 }
 
@@ -47,11 +51,93 @@ void ServerCore::log(const QString& msg) {
     emit logLine(line);
 }
 
+void ServerCore::sendError(ClientSession* c, const QString& code, const QString& msg) {
+    QJsonObject e = HProto::msg("error");
+    e["code"] = code;
+    e["msg"] = msg;
+    c->send(e);
+}
+
+// ================================================== grupos e permissões (v2)
+void ServerCore::setupBuiltinGroups() {
+    GroupDef guest;  guest.id = 1;  guest.name = "guest";
+    guest.perms = QJsonObject{
+        {"poke", true}, {"privmsg", true}, {"talkPower", 10}
+    };
+    GroupDef normal; normal.id = 2; normal.name = "normal";
+    normal.perms = QJsonObject{
+        {"poke", true}, {"privmsg", true}, {"chanCreateTemp", true},
+        {"talkPower", 25}
+    };
+    GroupDef admin;  admin.id = 3;  admin.name = "admin";
+    admin.perms = QJsonObject{
+        {"*", true}, {"kick", true}, {"ban", true}, {"banList", true},
+        {"move", true}, {"chanCreateTemp", true}, {"chanCreateSemi", true},
+        {"chanCreatePerm", true}, {"chanEdit", true}, {"chanDelete", true},
+        {"serverEdit", true}, {"groupEdit", true}, {"poke", true},
+        {"privmsg", true}, {"ignoreChanPass", true}, {"ignoreTalkPower", true},
+        {"talkPower", 75}
+    };
+    m_groups[1] = guest;
+    m_groups[2] = normal;
+    m_groups[3] = admin;
+}
+
+bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
+    if (!c) return false;
+    const GroupDef g = m_groups.value(c->groupId(), m_groups.value(1));
+    return g.perms.value(QStringLiteral("*")).toBool()
+        || g.perms.value(QString::fromLatin1(key)).toBool();
+}
+
+int ServerCore::talkPower(const ClientSession* c) const {
+    if (!c) return 0;
+    const GroupDef g = m_groups.value(c->groupId(), m_groups.value(1));
+    return g.perms.value(QStringLiteral("talkPower")).toInt();
+}
+
+QJsonObject ServerCore::myPermsOf(const GroupDef& g) { return g.perms; }
+
+int ServerCore::groupIdByName(const QString& name) const {
+    for (const GroupDef& g : m_groups)
+        if (g.name.compare(name, Qt::CaseInsensitive) == 0) return g.id;
+    return 0;
+}
+
+QJsonObject ServerCore::groupToJson(const GroupDef& g) const {
+    QJsonObject o;
+    o["id"] = g.id;
+    o["name"] = g.name;
+    o["perms"] = g.perms;
+    return o;
+}
+
+void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
+    if (!m_groups.contains(groupId)) groupId = 1;
+    c->setGroupId(groupId);
+    c->setGroup(m_groups[groupId].name);
+    if (announce) {
+        QJsonObject m = HProto::msg("user_group");
+        m["id"] = c->id();
+        m["group"] = c->group();
+        m["gid"] = groupId;
+        broadcast(m);
+    }
+}
+
+void ServerCore::broadcastGroups() {
+    QJsonObject m = HProto::msg("group_list");
+    QJsonArray arr;
+    for (const GroupDef& g : m_groups) arr << groupToJson(g);
+    m["groups"] = arr;
+    broadcast(m);
+}
+
 // ==================================================================== dados
 void ServerCore::loadData() {
     // canal padrão sempre existe
     SvrChan def{1, 0, QStringLiteral("Canal padrão"), QString(), QString(), QString(),
-                true, false, 2, 4, 6, -1, {}};
+                true, false, 0, 2, 4, 6, -1, {}};
     m_channels.insert(1, def);
     m_nextChanId = 2;
 
@@ -61,12 +147,14 @@ void ServerCore::loadData() {
     QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
     if (!doc.isObject()) return;
     QJsonObject root = doc.object();
+
     QJsonArray chans = root["channels"].toArray();
     for (const QJsonValue& v : chans) {
         SvrChan c = chanFromJson(v.toObject());
         if (c.id == 1) { // mescla o padrão mantendo id 1
             def.name = c.name; def.topic = c.topic; def.desc = c.desc;
             def.password = c.password; def.def = true; def.moderated = c.moderated;
+            def.ntalk = c.ntalk;
             def.type = 2; def.codec = c.codec; def.quality = c.quality;
             def.maxClients = c.maxClients;
             m_channels[1] = def;
@@ -76,7 +164,39 @@ void ServerCore::loadData() {
         m_nextChanId = qMax(m_nextChanId, c.id + 1);
     }
     if (root.contains("name")) m_name = root["name"].toString();
-    log(QStringLiteral("Dados carregados: %1 canais").arg(m_channels.size()));
+    if (root.contains("motd")) m_motd = root["motd"].toString();
+
+    // grupos customizados (ids >= 100; builtin sempre reconstruídos do código)
+    for (const QJsonValue& v : root["groups"].toArray()) {
+        const QJsonObject o = v.toObject();
+        GroupDef g;
+        g.id = o["id"].toInt();
+        g.name = o["name"].toString();
+        g.perms = o["perms"].toObject();
+        if (g.id >= 100 && !g.name.isEmpty()) {
+            m_groups[g.id] = g;
+            m_nextGroupId = qMax(m_nextGroupId, g.id + 1);
+        }
+    }
+    // atribuições persistentes uid -> grupo
+    const QJsonObject assign = root["assignments"].toObject();
+    for (auto it = assign.begin(); it != assign.end(); ++it)
+        m_assignByUid[it.key()] = it.value().toInt();
+    // chaves de privilégio já consumidas
+    for (const QJsonValue& v : root["usedKeys"].toArray())
+        m_usedKeys.insert(v.toString());
+    // registro de identidades
+    const QJsonObject clients = root["clients"].toObject();
+    for (auto it = clients.begin(); it != clients.end(); ++it) {
+        const QJsonObject o = it.value().toObject();
+        RegClient rc;
+        rc.name = o["name"].toString();
+        rc.firstSeen = QDateTime::fromString(o["first"].toString(), Qt::ISODate);
+        rc.lastSeen = QDateTime::fromString(o["last"].toString(), Qt::ISODate);
+        m_registry[it.key()] = rc;
+    }
+    log(QStringLiteral("Dados carregados: %1 canais, %2 grupos, %3 identidades")
+            .arg(m_channels.size()).arg(m_groups.size()).arg(m_registry.size()));
 }
 
 void ServerCore::saveData() {
@@ -85,9 +205,30 @@ void ServerCore::saveData() {
     for (const SvrChan& c : m_channels)
         if (c.type != 0) // temporários não persistem
             chans << chanToJson(c);
+    QJsonArray groups;
+    for (const GroupDef& g : m_groups)
+        if (g.id >= 100) groups << groupToJson(g); // builtin não precisa salvar
+    QJsonObject assign;
+    for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it)
+        assign[it.key()] = it.value();
+    QJsonArray used;
+    for (const QString& k : m_usedKeys) used << k;
+    QJsonObject clients;
+    for (auto it = m_registry.begin(); it != m_registry.end(); ++it) {
+        QJsonObject o;
+        o["name"] = it.value().name;
+        o["first"] = it.value().firstSeen.toString(Qt::ISODate);
+        o["last"] = it.value().lastSeen.toString(Qt::ISODate);
+        clients[it.key()] = o;
+    }
     QJsonObject root;
     root["name"] = m_name;
+    root["motd"] = m_motd;
     root["channels"] = chans;
+    root["groups"] = groups;
+    root["assignments"] = assign;
+    root["usedKeys"] = used;
+    root["clients"] = clients;
     QFile f(m_dataFile);
     if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
@@ -103,6 +244,7 @@ void ServerCore::loadBans() {
         QJsonObject o = v.toObject();
         BanEntry b;
         b.uid = o["uid"].toString();
+        b.ip = o["ip"].toString();
         b.name = o["name"].toString();
         b.reason = o["reason"].toString();
         if (o.contains("expires"))
@@ -116,12 +258,26 @@ void ServerCore::saveBans() {
     QJsonArray arr;
     for (const BanEntry& b : m_bans) {
         QJsonObject o;
-        o["uid"] = b.uid; o["name"] = b.name; o["reason"] = b.reason;
+        o["uid"] = b.uid; o["ip"] = b.ip; o["name"] = b.name; o["reason"] = b.reason;
         if (b.expires.isValid()) o["expires"] = b.expires.toString(Qt::ISODate);
         arr << o;
     }
     QFile f(m_banFile);
     if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(arr).toJson(QJsonDocument::Indented));
+}
+
+void ServerCore::setPrivilegeKeys(const QStringList& keys) {
+    m_privKeyGroup.clear();
+    for (QString k : keys) {
+        k = k.trimmed();
+        if (k.isEmpty()) continue;
+        // formato: CHAVE ou CHAVE@grupo
+        const int at = k.indexOf('@');
+        if (at > 0)
+            m_privKeyGroup[k.left(at)] = k.mid(at + 1);
+        else
+            m_privKeyGroup[k] = QStringLiteral("admin");
+    }
 }
 
 // ==================================================================== conexões
@@ -163,6 +319,15 @@ void ServerCore::checkIdleClients() {
     }
 }
 
+void ServerCore::registerClient(ClientSession* c) {
+    if (c->uniqueId().isEmpty()) return;
+    RegClient& rc = m_registry[c->uniqueId()];
+    if (!rc.firstSeen.isValid()) rc.firstSeen = QDateTime::currentDateTime();
+    rc.name = c->name();
+    rc.lastSeen = QDateTime::currentDateTime();
+    saveData();
+}
+
 // ==================================================================== mensagens
 void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     const QString t = obj["t"].toString();
@@ -173,6 +338,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "ping")        { QJsonObject p = HProto::msg("pong"); p["ts"] = obj["ts"]; c->send(p); }
     else if (t == "chat")        handleChat(c, obj);
     else if (t == "move")        handleMove(c, obj);
+    else if (t == "move_other")  handleMoveOther(c, obj);
     else if (t == "voice_hello") {
         if (!c->voiceToken()) {
             c->setVoiceToken(m_nextToken++);
@@ -183,7 +349,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
         v["udp"] = m_voice ? m_voice->port() : 0;
         c->send(v);
     }
-    else if (t == "talking")     { bool on = obj["on"].toBool(); if (c->talking() != on) { c->setTalking(on); QJsonObject u = HProto::msg("user_state"); u["id"] = c->id(); u["talking"] = on; broadcast(u, c->id()); } }
+    else if (t == "talking")     handleTalking(c, obj);
     else if (t == "status")      handleStatus(c, obj);
     else if (t == "nick")        handleNick(c, obj);
     else if (t == "desc")        handleDesc(c, obj);
@@ -193,8 +359,15 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "chan_delete") handleChanDelete(c, obj);
     else if (t == "kick")        handleKick(c, obj);
     else if (t == "ban")         handleBan(c, obj);
+    else if (t == "banlist")     handleBanList(c);
+    else if (t == "unban")       handleUnban(c, obj);
     else if (t == "privkey")     handlePrivkey(c, obj);
     else if (t == "volume")      handleVolume(c, obj);
+    else if (t == "group_list")  handleGroupList(c);
+    else if (t == "group_set")   handleGroupSet(c, obj);
+    else if (t == "group_delete") handleGroupDelete(c, obj);
+    else if (t == "client_set_group") handleClientSetGroup(c, obj);
+    else if (t == "server_edit") handleServerEdit(c, obj);
     else if (t == "quit") {
         // desconexão graciosa: notifica os demais antes de fechar
         QJsonObject left = HProto::msg("user_left");
@@ -213,58 +386,53 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     if (c->id() != 0) return; // já logado
 
     const QString nick = obj["nick"].toString().trimmed().left(30);
-    const QString uid = obj["uid"].toString();
+    const QString uid = obj["uid"].toString().left(64);
     const QString pass = obj["pass"].toString();
     const QString adminPass = obj["adminPass"].toString();
+    const int clientProto = obj["proto"].toInt();
 
-    if (obj["proto"].toInt() != HProto::kProtoVersion) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "bad_proto";
-        e["msg"] = "Versão do protocolo incompatível";
-        c->send(e);
+    if (clientProto < HProto::kProtoMin || clientProto > HProto::kProtoVersion) {
+        sendError(c, "bad_proto",
+                  QStringLiteral("Versão do protocolo incompatível (servidor aceita v%1-v%2)")
+                      .arg(HProto::kProtoMin).arg(HProto::kProtoVersion));
         c->closeAndDelete();
         return;
     }
     if (nick.isEmpty()) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "bad_nick";
-        e["msg"] = "Apelido inválido";
-        c->send(e);
+        sendError(c, "bad_nick", "Apelido inválido");
+        c->closeAndDelete();
+        return;
+    }
+    if (uid.isEmpty()) {
+        sendError(c, "bad_uid", "Identidade (ID único) ausente — atualize o cliente");
         c->closeAndDelete();
         return;
     }
 
-    // banido?
+    // banido? (por UID ou por IP)
+    const QString ip = c->ip().toString();
     for (const BanEntry& b : m_bans) {
-        if (b.uid == uid) {
-            if (!b.expires.isValid() || b.expires > QDateTime::currentDateTime()) {
-                QJsonObject e = HProto::msg("error");
-                e["code"] = "banned";
-                e["msg"] = b.reason.isEmpty() ? QStringLiteral("Você está banido deste servidor")
-                                              : QStringLiteral("Banido: %1").arg(b.reason);
-                c->send(e);
-                c->closeAndDelete();
-                return;
-            }
+        const bool match = (!b.uid.isEmpty() && b.uid == uid)
+                        || (!b.ip.isEmpty() && b.ip == ip);
+        if (match && (!b.expires.isValid() || b.expires > QDateTime::currentDateTime())) {
+            sendError(c, "banned",
+                      b.reason.isEmpty() ? QStringLiteral("Você está banido deste servidor")
+                                         : QStringLiteral("Banido: %1").arg(b.reason));
+            c->closeAndDelete();
+            return;
         }
     }
 
     // servidor cheio
     if (m_clients.size() >= m_maxClients) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "server_full";
-        e["msg"] = "Servidor cheio";
-        c->send(e);
+        sendError(c, "server_full", "Servidor cheio");
         c->closeAndDelete();
         return;
     }
 
     // senha do servidor
     if (!m_password.isEmpty() && pass != m_password) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "bad_password";
-        e["msg"] = "Senha do servidor incorreta";
-        c->send(e);
+        sendError(c, "bad_password", "Senha do servidor incorreta");
         c->closeAndDelete();
         return;
     }
@@ -272,27 +440,32 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     // apelido duplicado
     for (ClientSession* other : m_clients)
         if (other->name().compare(nick, Qt::CaseInsensitive) == 0) {
-            QJsonObject e = HProto::msg("error");
-            e["code"] = "name_in_use";
-            e["msg"] = "Apelido já em uso";
-            c->send(e);
+            sendError(c, "name_in_use", "Apelido já em uso");
             c->closeAndDelete();
             return;
         }
 
     c->setId(m_nextId++);
     c->setName(nick);
-    c->setGroup("guest");
+    c->setUid(uid);
+    c->setVersion(obj["ver"].toString().left(20));
+    c->setPlatform(obj["platform"].toString().left(20));
+
+    // grupo: atribuição persistente por UID tem prioridade; senão "normal"
+    int gid = m_assignByUid.value(uid, 0);
+    if (!m_groups.contains(gid)) gid = 2; // normal
+    applyGroup(c, gid, false);
+    // senha de administrador eleva a admin (mesmo com atribuição salva)
     if (!adminPass.isEmpty() && adminPass == m_adminPassword && !m_adminPassword.isEmpty())
-        c->setGroup("admin");
-    else
-        c->setGroup("normal");
+        applyGroup(c, 3, false);
 
     m_clients[c->id()] = c;
     addToChannel(c->id(), 1); // entra no canal padrão
-    log(QStringLiteral("Cliente #%1 (%2) entrou").arg(c->id()).arg(nick));
+    log(QStringLiteral("Cliente #%1 (%2) entrou [grupo: %3]")
+            .arg(c->id()).arg(nick, c->group()));
 
     sendWelcome(c);
+    registerClient(c);
 
     QJsonObject joined = HProto::msg("user_joined");
     joined["user"] = c->toJson();
@@ -302,12 +475,17 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::sendWelcome(ClientSession* c) {
     QJsonObject w = HProto::msg("welcome");
     w["selfId"] = c->id();
+    w["proto"] = HProto::kProtoVersion;
 
     QJsonObject server;
     server["name"] = m_name;
     server["motd"] = m_motd;
-    server["ver"] = "1.0.0";
+    server["ver"] = m_version;
+#ifdef Q_OS_WIN
+    server["platform"] = "Windows";
+#else
     server["platform"] = "Linux";
+#endif
     server["maxClients"] = m_maxClients;
     w["server"] = server;
 
@@ -318,6 +496,12 @@ void ServerCore::sendWelcome(ClientSession* c) {
     QJsonArray chans;
     for (const SvrChan& ch : m_channels) chans << chanToJson(ch);
     w["channels"] = chans;
+
+    // v2: lista de grupos + minhas permissões
+    QJsonArray groups;
+    for (const GroupDef& g : m_groups) groups << groupToJson(g);
+    w["groups"] = groups;
+    w["myPerms"] = myPermsOf(m_groups.value(c->groupId(), m_groups.value(1)));
 
     if (!c->voiceToken()) {
         c->setVoiceToken(m_nextToken++);
@@ -335,6 +519,10 @@ void ServerCore::handleChat(ClientSession* c, const QJsonObject& obj) {
     const QString scope = obj["scope"].toString();
     const QString text = obj["text"].toString().left(1024);
     if (text.trimmed().isEmpty()) return;
+    if (scope == "private" && !hasPerm(c, "privmsg")) {
+        sendError(c, "no_permission", "Sem permissão para mensagens privadas");
+        return;
+    }
 
     QJsonObject m = HProto::msg("chat");
     m["scope"] = scope;
@@ -366,17 +554,13 @@ void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
     if (oldChan == target) return;
 
     if (ch.maxClients >= 0 && ch.users.size() >= ch.maxClients) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "channel_full";
-        e["msg"] = QStringLiteral("O canal \"%1\" está cheio").arg(ch.name);
-        c->send(e);
+        sendError(c, "channel_full",
+                  QStringLiteral("O canal \"%1\" está cheio").arg(ch.name));
         return;
     }
-    if (!ch.password.isEmpty() && obj["pass"].toString() != ch.password) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "bad_channel_pass";
-        e["msg"] = "Senha do canal incorreta";
-        c->send(e);
+    if (!ch.password.isEmpty() && !hasPerm(c, "ignoreChanPass")
+            && obj["pass"].toString() != ch.password) {
+        sendError(c, "bad_channel_pass", "Senha do canal incorreta");
         return;
     }
 
@@ -388,6 +572,47 @@ void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
     m["channel"] = target;
     m["by"] = c->id();
     broadcast(m);
+}
+
+void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "move")) {
+        sendError(c, "no_permission", "Sem permissão para mover clientes");
+        return;
+    }
+    const int id = obj["id"].toInt();
+    const int target = obj["channel"].toInt();
+    if (!m_clients.contains(id) || !m_channels.contains(target)) return;
+    removeFromChannels(id);
+    m_channels[target].users << id;
+    QJsonObject m = HProto::msg("user_moved");
+    m["id"] = id; m["channel"] = target; m["by"] = c->id();
+    broadcast(m);
+}
+
+void ServerCore::handleTalking(ClientSession* c, const QJsonObject& obj) {
+    const bool on = obj["on"].toBool();
+    if (on && !canTalkIn(c, channelOfUser(c->id()))) {
+        sendError(c, "no_talk_power",
+                  "Você não tem poder de fala suficiente neste canal");
+        return; // não propaga: ninguém vê o indicador de fala
+    }
+    if (c->talking() != on) {
+        c->setTalking(on);
+        QJsonObject u = HProto::msg("user_state");
+        u["id"] = c->id();
+        u["talking"] = on;
+        broadcast(u, c->id());
+    }
+}
+
+bool ServerCore::canTalkIn(const ClientSession* c, int channelId) const {
+    if (!m_channels.contains(channelId)) return false;
+    const SvrChan& ch = m_channels[channelId];
+    int need = ch.ntalk;
+    if (need <= 0 && ch.moderated) need = 25;
+    if (need <= 0) return true;
+    if (hasPerm(c, "ignoreTalkPower")) return true;
+    return talkPower(c) >= need;
 }
 
 void ServerCore::handleStatus(ClientSession* c, const QJsonObject& obj) {
@@ -412,13 +637,12 @@ void ServerCore::handleNick(ClientSession* c, const QJsonObject& obj) {
     if (name.isEmpty() || name == c->name()) return;
     for (ClientSession* other : m_clients)
         if (other != c && other->name().compare(name, Qt::CaseInsensitive) == 0) {
-            QJsonObject e = HProto::msg("error");
-            e["code"] = "name_in_use";
-            e["msg"] = "Apelido já em uso";
-            c->send(e);
+            sendError(c, "name_in_use", "Apelido já em uso");
             return;
         }
     c->setName(name);
+    if (!c->uniqueId().isEmpty() && m_registry.contains(c->uniqueId()))
+        m_registry[c->uniqueId()].name = name;
     QJsonObject m = HProto::msg("user_nick");
     m["id"] = c->id();
     m["name"] = name;
@@ -434,6 +658,10 @@ void ServerCore::handleDesc(ClientSession* c, const QJsonObject& obj) {
 }
 
 void ServerCore::handlePoke(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "poke")) {
+        sendError(c, "no_permission", "Sem permissão para cutucar");
+        return;
+    }
     const int to = obj["to"].toInt();
     if (!m_clients.contains(to)) return;
     QJsonObject m = HProto::msg("poke");
@@ -449,22 +677,14 @@ void ServerCore::handleVolume(ClientSession*, const QJsonObject&) {
 }
 
 void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
-    const QString group = c->group();
     const int type = obj["type"].toInt(2);
-
-    // permissões: temp — normal+, semi/permanent — admin
-    if (type != 0 && !isAdmin(c)) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "no_permission";
-        e["msg"] = "Sem permissão para criar este tipo de canal";
-        c->send(e);
-        return;
-    }
-    if (group == "guest") {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "no_permission";
-        e["msg"] = "Convidados não podem criar canais";
-        c->send(e);
+    // permissão granular por tipo de canal
+    const char* perm = (type == 0) ? "chanCreateTemp"
+                     : (type == 1) ? "chanCreateSemi" : "chanCreatePerm";
+    if (!hasPerm(c, perm)) {
+        sendError(c, "no_permission",
+                  QStringLiteral("Sem permissão para criar canais do tipo %1")
+                      .arg(type == 0 ? "temporário" : (type == 1 ? "semi-permanente" : "permanente")));
         return;
     }
 
@@ -481,6 +701,7 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.password = obj["pass"].toString();
     ch.def = false;
     ch.moderated = obj["moderated"].toBool(false);
+    ch.ntalk = qBound(0, obj["ntalk"].toInt(0), 100);
     ch.type = type;
     ch.codec = qBound(0, obj["codec"].toInt(4), 5);
     ch.quality = qBound(0, obj["quality"].toInt(6), 10);
@@ -496,11 +717,8 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     const int id = obj["id"].toInt();
     if (!m_channels.contains(id)) return;
-    if (!isAdmin(c)) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "no_permission";
-        e["msg"] = "Sem permissão para editar canais";
-        c->send(e);
+    if (!hasPerm(c, "chanEdit")) {
+        sendError(c, "no_permission", "Sem permissão para editar canais");
         return;
     }
     SvrChan& ch = m_channels[id];
@@ -509,6 +727,7 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     if (obj.contains("desc")) ch.desc = obj["desc"].toString();
     if (obj.contains("pass")) ch.password = obj["pass"].toString();
     if (obj.contains("moderated")) ch.moderated = obj["moderated"].toBool();
+    if (obj.contains("ntalk")) ch.ntalk = qBound(0, obj["ntalk"].toInt(), 100);
     if (obj.contains("type") && id != 1) ch.type = obj["type"].toInt();
     if (obj.contains("codec")) ch.codec = qBound(0, obj["codec"].toInt(), 5);
     if (obj.contains("quality")) ch.quality = qBound(0, obj["quality"].toInt(), 10);
@@ -523,20 +742,14 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleChanDelete(ClientSession* c, const QJsonObject& obj) {
     const int id = obj["id"].toInt();
     if (!m_channels.contains(id) || id == 1) return;
-    if (!isAdmin(c)) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "no_permission";
-        e["msg"] = "Sem permissão para excluir canais";
-        c->send(e);
+    if (!hasPerm(c, "chanDelete")) {
+        sendError(c, "no_permission", "Sem permissão para excluir canais");
         return;
     }
     // sub-canais impedem exclusão
     for (const SvrChan& ch : m_channels)
         if (ch.parent == id) {
-            QJsonObject e = HProto::msg("error");
-            e["code"] = "has_children";
-            e["msg"] = "Exclua primeiro os sub-canais";
-            c->send(e);
+            sendError(c, "has_children", "Exclua primeiro os sub-canais");
             return;
         }
     // move usuários para o padrão
@@ -555,33 +768,37 @@ void ServerCore::handleChanDelete(ClientSession* c, const QJsonObject& obj) {
 }
 
 void ServerCore::handleKick(ClientSession* c, const QJsonObject& obj) {
-    if (!isAdmin(c)) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "no_permission";
-        e["msg"] = "Sem permissão para expulsar";
-        c->send(e);
+    if (!hasPerm(c, "kick")) {
+        sendError(c, "no_permission", "Sem permissão para expulsar");
         return;
     }
     const int id = obj["id"].toInt();
     if (!m_clients.contains(id) || id == c->id()) return;
+    // não-administrador supremo não expulsa administrador supremo
+    if (!hasPerm(c, "*") && hasPerm(m_clients[id], "*")) {
+        sendError(c, "no_permission", "Você não pode expulsar este cliente");
+        return;
+    }
     const bool fromServer = obj["from"].toString() == "server";
     doKick(m_clients[id], obj["reason"].toString(), fromServer, false);
 }
 
 void ServerCore::handleBan(ClientSession* c, const QJsonObject& obj) {
-    if (!isAdmin(c)) {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "no_permission";
-        e["msg"] = "Sem permissão para banir";
-        c->send(e);
+    if (!hasPerm(c, "ban")) {
+        sendError(c, "no_permission", "Sem permissão para banir");
         return;
     }
     const int id = obj["id"].toInt();
     if (!m_clients.contains(id) || id == c->id()) return;
+    if (!hasPerm(c, "*") && hasPerm(m_clients[id], "*")) {
+        sendError(c, "no_permission", "Você não pode banir este cliente");
+        return;
+    }
     const int minutes = obj["minutes"].toInt(0);
 
     BanEntry b;
     b.uid = m_clients[id]->uniqueId();
+    b.ip = m_clients[id]->ip().toString();
     b.name = m_clients[id]->name();
     b.reason = obj["reason"].toString();
     if (minutes > 0) b.expires = QDateTime::currentDateTime().addSecs(qint64(minutes) * 60);
@@ -591,21 +808,194 @@ void ServerCore::handleBan(ClientSession* c, const QJsonObject& obj) {
     doKick(m_clients[id], b.reason, true, true, minutes);
 }
 
+void ServerCore::handleBanList(ClientSession* c) {
+    if (!hasPerm(c, "banList")) {
+        sendError(c, "no_permission", "Sem permissão para ver a lista de banidos");
+        return;
+    }
+    QJsonObject m = HProto::msg("banlist");
+    QJsonArray arr;
+    for (const BanEntry& b : m_bans) {
+        QJsonObject o;
+        o["uid"] = b.uid; o["ip"] = b.ip; o["name"] = b.name; o["reason"] = b.reason;
+        if (b.expires.isValid()) o["expires"] = b.expires.toString(Qt::ISODate);
+        arr << o;
+    }
+    m["bans"] = arr;
+    c->send(m);
+}
+
+void ServerCore::handleUnban(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "ban")) {
+        sendError(c, "no_permission", "Sem permissão para remover banimentos");
+        return;
+    }
+    const QString uid = obj["uid"].toString();
+    int removed = 0;
+    for (int i = m_bans.size() - 1; i >= 0; --i)
+        if (m_bans[i].uid == uid) { m_bans.removeAt(i); ++removed; }
+    if (removed > 0) {
+        saveBans();
+        QJsonObject m = HProto::msg("ban_removed");
+        m["uid"] = uid;
+        c->send(m);
+        log(QStringLiteral("%1 removeu banimento de %2").arg(c->name(), uid.left(16)));
+    } else {
+        sendError(c, "not_found", "Banimento não encontrado");
+    }
+}
+
 void ServerCore::handlePrivkey(ClientSession* c, const QJsonObject& obj) {
     const QString key = obj["key"].toString();
-    if (m_privilegeKeys.contains(key)) {
-        c->setGroup("admin");
-        QJsonObject m = HProto::msg("user_group");
-        m["id"] = c->id();
-        m["group"] = "admin";
-        broadcast(m);
-        log(QStringLiteral("Cliente #%1 usou chave de privilégio e virou admin").arg(c->id()));
-    } else {
-        QJsonObject e = HProto::msg("error");
-        e["code"] = "bad_privkey";
-        e["msg"] = "Chave de privilégio inválida";
-        c->send(e);
+    if (!m_privKeyGroup.contains(key)) {
+        sendError(c, "bad_privkey", "Chave de privilégio inválida");
+        return;
     }
+    if (!m_privKeyReuse && m_usedKeys.contains(key)) {
+        sendError(c, "privkey_used",
+                  "Esta chave de privilégio já foi utilizada");
+        return;
+    }
+    QString groupName = m_privKeyGroup.value(key, "admin");
+    int gid = groupIdByName(groupName);
+    if (gid == 0) gid = 3; // admin
+    m_usedKeys.insert(key);
+    saveData();
+    applyGroup(c, gid, true);
+    // a chave vale permanentemente para este UID
+    m_assignByUid[c->uniqueId()] = gid;
+    saveData();
+    log(QStringLiteral("Cliente #%1 (%2) usou chave de privilégio -> grupo \"%3\"")
+            .arg(c->id()).arg(c->name(), c->group()));
+}
+
+// ------------------------------------------------- grupos via protocolo (v2)
+void ServerCore::handleGroupList(ClientSession* c) {
+    QJsonObject m = HProto::msg("group_list");
+    QJsonArray arr;
+    for (const GroupDef& g : m_groups) arr << groupToJson(g);
+    m["groups"] = arr;
+    c->send(m);
+}
+
+void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "groupEdit")) {
+        sendError(c, "no_permission", "Sem permissão para gerenciar grupos");
+        return;
+    }
+    const QString name = obj["name"].toString().trimmed().left(30);
+    const QJsonObject perms = obj["perms"].toObject();
+
+    GroupDef g;
+    const int id = obj["id"].toInt(0);
+    if (id > 0) {
+        // edição: name é opcional (permite mudar só permissões)
+        if (!m_groups.contains(id)) { sendError(c, "not_found", "Grupo não encontrado"); return; }
+        g = m_groups[id];
+        // proteção anti-lockout: não deixar remover "*" de grupo que tinha "*"
+        if (obj.contains("perms") && g.perms.value("*").toBool() && !perms.value("*").toBool()) {
+            sendError(c, "locked", "Não é possível remover a permissão total (*) deste grupo");
+            return;
+        }
+        if (obj.contains("name") && !name.isEmpty()) g.name = name;
+        if (obj.contains("perms")) g.perms = perms;
+        m_groups[id] = g;
+    } else {
+        if (name.isEmpty()) return; // criação exige nome
+        g.id = m_nextGroupId++;
+        g.name = name;
+        g.perms = perms;
+        if (g.perms.value("*").toBool() && !hasPerm(c, "*")) {
+            sendError(c, "no_permission", "Apenas administradores (*) criam grupos com *");
+            return;
+        }
+        m_groups[g.id] = g;
+    }
+    saveData();
+    // clientes com este grupo mudam de rótulo se o nome mudou
+    for (ClientSession* o : m_clients)
+        if (o->groupId() == g.id) {
+            o->setGroup(g.name);
+            QJsonObject m = HProto::msg("user_group");
+            m["id"] = o->id(); m["group"] = o->group(); m["gid"] = g.id;
+            broadcast(m);
+        }
+    broadcastGroups();
+    log(QStringLiteral("Grupo \"%1\" (#%2) %3 por %4")
+            .arg(g.name).arg(g.id).arg(id > 0 ? "atualizado" : "criado", c->name()));
+}
+
+void ServerCore::handleGroupDelete(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "groupEdit")) {
+        sendError(c, "no_permission", "Sem permissão para gerenciar grupos");
+        return;
+    }
+    const int id = obj["id"].toInt();
+    if (id < 100 || !m_groups.contains(id)) {
+        sendError(c, "locked", "Grupos internos não podem ser excluídos");
+        return;
+    }
+    m_groups.remove(id);
+    for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it)
+        if (it.value() == id) it.value() = 1;
+    for (ClientSession* o : m_clients)
+        if (o->groupId() == id) applyGroup(o, 1, true);
+    saveData();
+    broadcastGroups();
+}
+
+void ServerCore::handleClientSetGroup(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "groupEdit")) {
+        sendError(c, "no_permission", "Sem permissão para atribuir grupos");
+        return;
+    }
+    const int gid = obj["gid"].toInt();
+    if (!m_groups.contains(gid)) { sendError(c, "not_found", "Grupo não encontrado"); return; }
+    // só super-admin (*) eleva outros ao grupo *
+    if (m_groups[gid].perms.value("*").toBool() && !hasPerm(c, "*")) {
+        sendError(c, "no_permission", "Apenas administradores (*) atribuem este grupo");
+        return;
+    }
+
+    // alvo por id online ou por uid offline
+    QString targetUid = obj["uid"].toString();
+    if (obj.contains("id")) {
+        const int cid = obj["id"].toInt();
+        if (!m_clients.contains(cid)) return;
+        ClientSession* t = m_clients[cid];
+        targetUid = t->uniqueId();
+        applyGroup(t, gid, true);
+    } else if (m_registry.contains(targetUid)) {
+        // offline: só persiste
+    } else if (targetUid.isEmpty()) {
+        return;
+    }
+    if (!targetUid.isEmpty()) {
+        m_assignByUid[targetUid] = gid;
+        saveData();
+        log(QStringLiteral("%1 atribuiu grupo \"%2\" ao UID %3")
+                .arg(c->name(), m_groups[gid].name, targetUid.left(16)));
+    }
+}
+
+void ServerCore::handleServerEdit(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "serverEdit")) {
+        sendError(c, "no_permission", "Sem permissão para editar o servidor");
+        return;
+    }
+    if (obj.contains("name")) {
+        const QString n = obj["name"].toString().trimmed().left(40);
+        if (!n.isEmpty() && n != m_name) {
+            m_name = n;
+            log(QStringLiteral("Nome do servidor alterado para \"%1\" por %2").arg(n, c->name()));
+        }
+    }
+    if (obj.contains("motd")) m_motd = obj["motd"].toString().left(200);
+    saveData();
+    QJsonObject m = HProto::msg("server_edit");
+    m["name"] = m_name;
+    m["motd"] = m_motd;
+    broadcast(m);
 }
 
 void ServerCore::doKick(ClientSession* c, const QString& reason, bool fromServer,
@@ -672,6 +1062,7 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
     c.password = o["password"].toString();
     c.def = o["def"].toBool(false);
     c.moderated = o["moderated"].toBool(false);
+    c.ntalk = o["ntalk"].toInt(0);
     c.type = o["type"].toInt(2);
     c.codec = o["codec"].toInt(4);
     c.quality = o["quality"].toInt(6);
@@ -680,21 +1071,19 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
 }
 
 QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
-    QJsonArray users;
-    for (int u : c.users) users << u;
-    return HProto::chanJson(c.id, c.parent, c.name, c.topic, c.desc,
-                            !c.password.isEmpty(), c.id == 1, c.type, c.moderated,
-                            c.codec, c.quality, c.maxClients, c.users);
+    QJsonObject j = HProto::chanJson(c.id, c.parent, c.name, c.topic, c.desc,
+                                     !c.password.isEmpty(), c.id == 1, c.type, c.moderated,
+                                     c.codec, c.quality, c.maxClients, c.users);
+    j["ntalk"] = c.ntalk;
+    return j;
 }
-
-void ServerCore::dumpBansIfNeeded() {}
-
-bool ServerCore::isAdmin(const ClientSession* c) const { return c->group() == "admin"; }
 
 void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload) {
     if (!sender || !m_voice) return;
     const int chan = channelOfUser(sender->id());
     if (chan == 0) return;
+    // Cenário 3: talk power — pacotes de voz de quem não pode falar são descartados
+    if (!canTalkIn(sender, chan)) return;
 
     const QByteArray packet = HProto::encodeVoiceServer(quint32(sender->id()), seq, payload);
     for (ClientSession* c : m_clients) {

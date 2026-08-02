@@ -36,10 +36,22 @@ void ClientSession::onDisconnected() {
     emit disconnected(this);
 }
 
+QHostAddress ClientSession::ip() const {
+    QHostAddress a = m_socket->peerAddress();
+    // normaliza IPv4-mapeado (::ffff:127.0.0.1) para 127.0.0.1
+    if (a.protocol() == QAbstractSocket::IPv6Protocol) {
+        bool ok = false;
+        const QHostAddress v4(a.toIPv4Address(&ok));
+        if (ok) return v4;
+    }
+    return a;
+}
+
 QJsonObject ClientSession::toJson(bool) const {
     QJsonObject u;
     u["id"] = m_id; u["name"] = m_name; u["uid"] = m_uid; u["ver"] = m_version;
     u["platform"] = m_platform; u["desc"] = m_desc; u["group"] = m_group;
+    u["gid"] = m_groupId;
     u["mic"] = m_micMuted; u["spk"] = m_spkMuted; u["away"] = m_away;
     u["rec"] = m_recording; u["cc"] = m_commander; u["talking"] = m_talking;
     return u;

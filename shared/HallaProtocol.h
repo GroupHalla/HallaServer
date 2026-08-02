@@ -8,15 +8,18 @@
 #include <QByteArray>
 
 // ============================================================================
-// Halla Protocol v1 — camada compartilhada (mesmo código no cliente e servidor)
+// Halla Protocol v2 — camada compartilhada (mesmo código no cliente e servidor)
 // Vide PROTOCOL.md para a especificação completa.
+// v2: permissões granulares por grupo, banlist, grupos por UID, talk power.
+// O servidor aceita clientes v1 (recursos novos exigem v2).
 // ============================================================================
 
 namespace HProto {
 
 constexpr quint16 kDefaultPort = 9987;
 constexpr quint32 kVoiceMagic = 0x48414C4C; // "HALL"
-constexpr int kProtoVersion = 1;
+constexpr int kProtoVersion = 2;    // versão máxima suportada
+constexpr int kProtoMin = 1;        // versão mínima aceita pelo servidor
 
 // ---- controle TCP: JSON compactado terminado em '\n' ----------------------
 inline QByteArray encodeMsg(const QJsonObject& obj) {
