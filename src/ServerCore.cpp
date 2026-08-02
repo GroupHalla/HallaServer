@@ -13,6 +13,7 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
+#include <QRandomGenerator>
 
 ServerCore::ServerCore(QObject* parent) : QObject(parent) {
     m_nextToken = 1024;
@@ -319,6 +320,48 @@ void ServerCore::loadData() {
                 m_files << fm;
             }
         }
+    }
+    
+    // Carrega ou gera chave de privilégio dinâmica se nenhuma estiver definida no .ini
+    QSqlDatabase dbConn = QSqlDatabase::database("HallaServerConnection");
+    if (dbConn.isOpen() && m_privKeyGroup.isEmpty()) {
+        QSqlQuery q(dbConn);
+        QString savedKey;
+        q.prepare("SELECT `value` FROM settings WHERE `key` = :k");
+        q.bindValue(":k", "generatedPrivilegeKey");
+        if (q.exec() && q.next()) {
+            savedKey = q.value(0).toString();
+        }
+        
+        if (savedKey.isEmpty()) {
+            // Gera uma nova chave segura estilo TS3
+            const QString chars = QStringLiteral("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+            savedKey = QStringLiteral("HL3-");
+            for (int block = 0; block < 4; ++block) {
+                for (int i = 0; i < 4; ++i) {
+                    savedKey += chars.at(int(QRandomGenerator::global()->bounded(chars.length())));
+                }
+                if (block < 3) {
+                    savedKey += '-';
+                }
+            }
+            
+            // Salva no banco de dados
+            q.prepare("INSERT INTO settings (`key`, `value`) VALUES (:k, :v)");
+            q.bindValue(":k", "generatedPrivilegeKey");
+            q.bindValue(":v", savedKey);
+            q.exec();
+            
+            // Exibe a chave de forma destacada no console!
+            log(QStringLiteral("\n"
+                               "=================================================================\n"
+                               "  CHAVE DE PRIVILÉGIO ADMINISTRADOR GERADA AUTOMATICAMENTE:\n"
+                               "  %1\n"
+                               "  Insira esta chave no seu cliente para obter privilégio total!\n"
+                               "=================================================================\n").arg(savedKey));
+        }
+        
+        m_privKeyGroup[savedKey] = QStringLiteral("admin");
     }
     
     log(QStringLiteral("Dados carregados do SQLite: %1 canais, %2 grupos, %3 identidades")

@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.4-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.5-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.4-win64.zip
+          path: halla-server-3.2.5-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -112,13 +112,13 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.4-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-3.2.5-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.4-linux-x64.tar.gz
+          path: halla-server-3.2.5-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -138,17 +138,20 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.4
-          name: Halla Server 3.2.4 — Suporte ao MySQL/MariaDB e Controle Total
+          tag_name: v3.2.5
+          name: Halla Server 3.2.5 — Geração de Chaves e Controle de Banco
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.4-win64.zip
-            halla-server-3.2.4-linux-x64.tar.gz
+            halla-server-3.2.5-win64.zip
+            halla-server-3.2.5-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.4
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.5
 
-            Esta release traz o suporte completo ao banco de dados relacional **MySQL / MariaDB** integrado, o bypass definitivo de permissões para administradores, e o protocolo de sincronização Base64 de imagens de cargos!
+            Esta release consolida a geração de chaves de privilégio de forma automática (idêntica ao TeamSpeak 3), o suporte completo ao banco de dados relacional **MySQL / MariaDB** integrado, o bypass definitivo de permissões para administradores, e o protocolo de sincronização Base64 de imagens de cargos!
+
+            ### 🔑 Geração Automática de Chaves de Privilégio (Estilo TS3)
+            * **Chaves Autogeradas:** Se nenhuma chave de privilégio estiver configurada no arquivo `.ini`, o servidor gera automaticamente uma chave única e segura do tipo `HL3-XXXX-YYYY-ZZZZ-WWWW` na primeira execução, salva no banco de dados, e a exibe em um destaque no console para que o dono consiga se registrar como Admin de forma instantânea!
 
             ### 💾 Suporte Completo ao MySQL e MariaDB (Item 3)
             * **Independência de Dialeto:** Além do SQLite local, o Halla Server agora pode se conectar diretamente a instâncias remotas ou locais de **MySQL e MariaDB** via driver `QMYSQL`!
