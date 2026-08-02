@@ -18,6 +18,7 @@ add_executable(halla-server
     src/main.cpp
     src/ServerCore.cpp
     src/ServerV3.cpp
+    src/ServerQuery.cpp
     src/ClientSession.cpp
     src/VoiceRelay.cpp
 )

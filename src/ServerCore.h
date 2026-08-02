@@ -9,6 +9,7 @@
 #include <QHostAddress>
 #include <QDateTime>
 #include <QSet>
+#include <functional>
 
 class ClientSession;
 class VoiceRelay;
@@ -78,6 +79,29 @@ public:
     void log(const QString& msg);
     int clientCount() const { return m_clients.size(); }
 
+    // ---- ServerQuery (interface administrativa em texto, porta 10011)
+    friend class ServerQuery;
+    QString version() const         { return m_version; }
+    QString platform() const {
+#ifdef Q_OS_WIN
+        return QStringLiteral("Windows");
+#else
+        return QStringLiteral("Linux");
+#endif
+    }
+    QString serverName() const      { return m_name; }
+    QString motd() const            { return m_motd; }
+    int maxClients() const          { return m_maxClients; }
+    quint16 port() const            { return m_controlPort; }
+    QString queryPassword() const   { return m_queryPass; }
+    void setQueryPassword(const QString& p);
+    void queryCounts(int& channels, int& clients) const;
+    void queryCommand(class QTcpSocket* s, const QString& cmd,
+                      const QMap<QString, QString>& args,
+                      const std::function<void(class QTcpSocket*)>& ok,
+                      const std::function<void(class QTcpSocket*, int,
+                                               const QString&)>& err);
+
     ClientSession* clientByVoiceToken(quint32 token) { return m_byVoiceToken.value(token, nullptr); }
     void relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload);
 
@@ -96,7 +120,9 @@ private:
 
     QString m_name = "Servidor Halla";
     QString m_motd = "Bem-vindo ao Halla!";
-    QString m_version = "2.0.0";
+    QString m_version = "3.0.0";
+    quint16 m_controlPort = 9987;
+    QString m_queryPass;              // senha do ServerQuery (persistida)
     int m_maxClients = 32;
     QString m_password;
     QString m_adminPassword;

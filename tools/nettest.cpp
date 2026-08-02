@@ -70,10 +70,50 @@ public:
     }
 };
 
+// Cliente em modo texto p/ ServerQuery (linhas terminadas em \n\r)
+struct QueryClient {
+    QTcpSocket tcp;
+    QByteArray buf;
+    QStringList lines;
+    QueryClient() {
+        QObject::connect(&tcp, &QTcpSocket::readyRead, &tcp, [this] {
+            buf += tcp.readAll();
+            int i;
+            while ((i = buf.indexOf('\n')) >= 0) {
+                QByteArray l = buf.left(i);
+                buf.remove(0, i + 1);
+                if (l.endsWith('\r')) l.chop(1);
+                if (!l.isEmpty()) lines << QString::fromUtf8(l);
+            }
+        });
+    }
+    bool connectTo(const QString& host, quint16 port) {
+        tcp.connectToHost(host, port);
+        return tcp.waitForConnected(3000);
+    }
+    void cmd(const QString& c) { tcp.write(c.toUtf8() + "\n"); }
+    QString waitLineContaining(const QString& needle, int ms = 2500) {
+        QElapsedTimer t; t.start();
+        while (t.elapsed() < ms) {
+            for (int i = 0; i < lines.size(); ++i)
+                if (lines[i].contains(needle)) {
+                    QString l = lines[i];
+                    lines.removeAt(i);
+                    return l;
+                }
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        }
+        return QString();
+    }
+};
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     const QString host = argc > 1 ? QString::fromLatin1(argv[1]) : "127.0.0.1";
     const quint16 port = argc > 2 ? quint16(QString::fromLatin1(argv[2]).toUShort()) : 9987;
+    const quint16 queryPort = argc > 3 ? quint16(QString::fromLatin1(argv[3]).toUShort()) : 10011;
+    const QString queryUser = qEnvironmentVariable("HALLA_QUERY_USER", "serveradmin");
+    const QString queryPass = qEnvironmentVariable("HALLA_QUERY_PASS", "halla-query-test");
 
     printf("=== Teste do protocolo Halla contra %s:%d ===\n\n", qPrintable(host), port);
 
@@ -741,6 +781,90 @@ int main(int argc, char* argv[]) {
               "operador NÃO expulsa do servidor");
     } else {
         CHECK(false, "operador (canal NaoPode não encontrado)");
+    }
+
+    // ======================================================================
+    // ServerQuery (v3.1): interface administrativa em texto
+    // ======================================================================
+    printf("\n--- ServerQuery (porta %s) ---\n", qPrintable(QString::number(queryPort)));
+    {
+        // cliente de voz que será alvo de gm/kick via query
+        FakeClient Quinn("Quinn");
+        Quinn.connectTo(host, port);
+        QByteArray uidQ(21, 0);
+        for (int i = 0; i < 21; ++i) uidQ[i] = char(QRandomGenerator::global()->generate());
+        QJsonObject hq = HProto::msg("hello");
+        hq["proto"] = HProto::kProtoVersion;
+        hq["uid"] = QString::fromLatin1(uidQ.toBase64());
+        hq["nick"] = "Quinn"; hq["ver"] = "3.6.2"; hq["platform"] = "Linux";
+        Quinn.send(hq);
+        QJsonObject wq = Quinn.waitFor("welcome", 3000);
+        Quinn.id = wq["selfId"].toInt();
+
+        QueryClient Q;
+        const bool qConn = Q.connectTo(host, queryPort);
+        CHECK(qConn, "ServerQuery aceita conexão");
+        if (qConn) {
+            CHECK(!Q.waitLineContaining("Halla Server Query").isEmpty(),
+                  "ServerQuery envia banner");
+
+            Q.cmd("login client_login_name=serveradmin client_login_password=errada");
+            CHECK(Q.waitLineContaining("error id=1538").contains("1538"),
+                  "login com senha errada -> erro 1538");
+
+            Q.cmd("login client_login_name=" + queryUser + " client_login_password=" + queryPass);
+            CHECK(Q.waitLineContaining("error id=0").contains("id=0"),
+                  "login com credenciais corretas");
+
+            Q.cmd("serverinfo");
+            CHECK(Q.waitLineContaining("virtualserver_name=").contains("virtualserver_"),
+                  "serverinfo reporta o servidor");
+
+            Q.cmd("clientlist");
+            // agrega linhas de clientes até chegar o "error id=0"
+            {
+                QString joined;
+                QElapsedTimer t; t.start();
+                while (t.elapsed() < 3000) {
+                    const QString l = Q.waitLineContaining("=", 500);
+                    if (l.startsWith("error ")) break;
+                    joined += l;
+                }
+                CHECK(joined.contains("client_nickname=Quinn"),
+                      "clientlist inclui Quinn");
+            }
+
+            Q.cmd("channellist");
+            CHECK(Q.waitLineContaining("channel_name=").contains("channel_name="),
+                  "channellist lista canais");
+
+            Q.cmd("gm msg=aviso\\sgeral\\squery");
+            QJsonObject gm = Quinn.waitFor("chat", 3000);
+            CHECK(gm["fromName"].toString().contains("ServerQuery") &&
+                      gm["text"].toString().contains("aviso geral query"),
+                  "gm chega como chat do servidor");
+
+            // banadd/banlist/bandel com UID aleatório (não é do Quinn)
+            QByteArray uidR(24, 'x');
+            Q.cmd("banadd uid=" + QString::fromLatin1(uidR.toBase64()) +
+                  " banreason=teste\\squery");
+            CHECK(!Q.waitLineContaining("error id=0").isEmpty(), "banadd confirma");
+            Q.cmd("banlist");
+            CHECK(Q.waitLineContaining("banid=").contains("banid="),
+                  "banlist lista banimentos");
+            Q.cmd("bandel banid=" + QString::fromLatin1(uidR.toBase64()));
+            CHECK(!Q.waitLineContaining("error id=0").isEmpty(), "bandel confirma");
+
+            Q.cmd(QString("clientkick clid=%1 reasonmsg=teste").arg(Quinn.id));
+            QJsonObject kicked = Quinn.waitFor("kicked", 3000);
+            CHECK(kicked["t"].toString() == "kicked" && kicked["ban"].toBool() == false ||
+                  kicked["t"].toString() == "kicked",
+                  "clientkick expulsa o cliente alvo");
+
+            Q.cmd("quit");
+        } else {
+            printf("  (ServerQuery indisponível — demais testes de query pulados)\n");
+        }
     }
 
     printf("\n=== Resultado: %d OK, %d falhas ===\n", g_pass, g_fail);

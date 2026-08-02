@@ -287,3 +287,35 @@ Arquivos físicos em `<dados>/files/<canal>/<nome>`; metadados persistidos em
 O envio de voz do cliente deve chamar `talking=on` antes; sem poder de fala o
 servidor responde `no_talk_power` e descarta os pacotes até que o usuário se
 calle (`talking=off`).
+
+---
+
+# ServerQuery (v3.1) — administração em texto
+
+Interface TCP em modo texto inspirada no TeamSpeak 3 ServerQuery
+(porta padrão `10011`, configurável em `[query]` do ini; `0` = desligada).
+Comandos `chave=valor`, uma linha por resposta; cada resposta termina com
+`error id=0 msg=ok` (ou o código do erro) seguido de `\n\r`.
+Espaços escapam como `\s`, pipe como `\p`, barra como `\/`.
+
+Na **primeira execução sem senha definida**, o servidor gera uma senha
+aleatória, mostra no console e grava em `halla-data.json` (`queryPass`).
+
+```
+login client_login_name=serveradmin client_login_password=***
+  -> error id=0 msg=ok
+serverinfo
+  -> virtualserver_name=Meu\sservidor virtualserver_clientsonline=3 ... error id=0
+clientlist
+  -> clid=1 cid=1 client_nickname=Alice client_unique_identifier=...  error id=0
+channellist
+  -> cid=1 pid=0 channel_name=Canal\spadrão total_clients=2  error id=0
+clientkick clid=<id> reasonmsg=<texto>   -> expulsa do servidor
+banclient  clid=<id> time=<min> reasonmsg=<texto>  -> bane + expulsa
+banadd     uid=<uid> time=<min> banreason=<texto>  -> bane por identidade
+banlist | bandel banid=<uid>
+gm msg=<texto>          -> mensagem global (chat do servidor, "ServerQuery (admin)")
+help | version | logout | quit
+```
+Códigos de erro TS3-like: `1538` (login inválido), `512` (não encontrado),
+`256` (comando desconhecido), `2568` (não autenticado).

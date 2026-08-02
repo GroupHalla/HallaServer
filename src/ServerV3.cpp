@@ -1,9 +1,11 @@
 #include "ServerCore.h"
 #include "ClientSession.h"
 #include "HallaProtocol.h"
+#include "ServerQuery.h"
 
 #include <QFile>
 #include <QDir>
+#include <QTcpSocket>
 #include <QJsonArray>
 #include <QCryptographicHash>
 
@@ -233,4 +235,144 @@ void ServerCore::handleFtDelete(ClientSession* c, const QJsonObject& obj) {
     QJsonObject ok = HProto::msg("ft_deleted");
     ok["channel"] = chan; ok["name"] = name;
     c->send(ok);
+}
+
+// ============================================================================
+// ServerQuery (v3.1) — execução dos comandos administrativos sobre text/TCP
+// ============================================================================
+void ServerCore::setQueryPassword(const QString& p) {
+    m_queryPass = p;
+    saveData();
+}
+
+void ServerCore::queryCounts(int& channels, int& clients) const {
+    channels = int(m_channels.size());
+    clients  = m_clients.size();
+}
+
+void ServerCore::queryCommand(QTcpSocket* s, const QString& cmd,
+                              const QMap<QString, QString>& args,
+                              const std::function<void(QTcpSocket*)>& ok,
+                              const std::function<void(QTcpSocket*, int,
+                                                       const QString&)>& err) {
+    auto line = [&](const QString& l) { s->write(l.toUtf8() + "\n\r"); };
+    auto esc  = [](const QString& v) { return ServerQuery::escape(v); };
+
+    if (cmd == QLatin1String("clientlist")) {
+        for (ClientSession* c : m_clients) {
+            int cid = 1;
+            for (const SvrChan& ch : m_channels)
+                if (ch.users.contains(c->id())) { cid = ch.id; break; }
+            line(QStringLiteral(
+                "clid=%1 cid=%2 client_nickname=%3 client_unique_identifier=%4 "
+                "client_version=%5 client_platform=%6")
+                .arg(c->id()).arg(cid)
+                .arg(esc(c->name()), esc(c->uniqueId()),
+                     esc(c->version().isEmpty() ? QStringLiteral("Halla") : c->version()),
+                     esc(c->platform())));
+        }
+        ok(s);
+        return;
+    }
+
+    if (cmd == QLatin1String("channellist")) {
+        for (const SvrChan& ch : m_channels)
+            line(QStringLiteral("cid=%1 pid=%2 channel_name=%3 total_clients=%4")
+                .arg(ch.id).arg(ch.parent).arg(esc(ch.name)).arg(ch.users.size()));
+        ok(s);
+        return;
+    }
+
+    if (cmd == QLatin1String("banlist")) {
+        for (const BanEntry& b : m_bans)
+            line(QStringLiteral(
+                "banid=%1 uid=%1 ip=%2 name=%3 reason=%4 duration=%5")
+                .arg(esc(b.uid), esc(b.ip), esc(b.name), esc(b.reason),
+                     esc(b.expires.isValid()
+                         ? QDateTime::currentDateTime().secsTo(b.expires) > 0
+                           ? QStringLiteral("%1s").arg(QDateTime::currentDateTime()
+                                                            .secsTo(b.expires))
+                           : QStringLiteral("expirado")
+                         : QStringLiteral("permanente"))));
+        ok(s);
+        return;
+    }
+
+    if (cmd == QLatin1String("clientkick")) {
+        const int id = args.value(QStringLiteral("clid")).toInt();
+        ClientSession* t = m_clients.value(id, nullptr);
+        if (!t) { err(s, 512, QStringLiteral("cliente nao encontrado")); return; }
+        const QString reason = args.value(QStringLiteral("reasonmsg"));
+        log(QStringLiteral("ServerQuery expulsou #%1 (%2)%3")
+                .arg(t->id()).arg(t->name(),
+                reason.isEmpty() ? QString() : QStringLiteral(": %1").arg(reason)));
+        doKick(t, reason, true, false);
+        ok(s);
+        return;
+    }
+
+    if (cmd == QLatin1String("banclient")) {
+        const int id = args.value(QStringLiteral("clid")).toInt();
+        ClientSession* t = m_clients.value(id, nullptr);
+        if (!t) { err(s, 512, QStringLiteral("cliente nao encontrado")); return; }
+        const int minutes = args.value(QStringLiteral("time")).toInt();
+        const QString reason = args.value(QStringLiteral("reasonmsg"));
+        BanEntry b;
+        b.uid = t->uniqueId();
+        b.ip  = t->ip().toString();
+        b.name = t->name();
+        b.reason = reason;
+        if (minutes > 0)
+            b.expires = QDateTime::currentDateTime().addSecs(qint64(minutes) * 60);
+        m_bans << b;
+        saveBans();
+        log(QStringLiteral("ServerQuery baniu #%1 (%2)").arg(t->id()).arg(t->name()));
+        doKick(t, reason, true, true, minutes);
+        ok(s);
+        return;
+    }
+
+    if (cmd == QLatin1String("banadd")) {
+        const QString uid = args.value(QStringLiteral("uid"));
+        if (uid.isEmpty()) { err(s, 1538, QStringLiteral("uid vazio")); return; }
+        const int minutes = args.value(QStringLiteral("time")).toInt();
+        BanEntry b;
+        b.uid = uid;
+        b.name = m_registry.value(uid).name;
+        b.reason = args.value(QStringLiteral("banreason"));
+        if (minutes > 0)
+            b.expires = QDateTime::currentDateTime().addSecs(qint64(minutes) * 60);
+        m_bans << b;
+        saveBans();
+        log(QStringLiteral("ServerQuery adicionou banimento de %1").arg(uid.left(16)));
+        ok(s);
+        return;
+    }
+
+    if (cmd == QLatin1String("bandel")) {
+        const QString uid = args.value(QStringLiteral("banid"));
+        int removed = 0;
+        for (int i = m_bans.size() - 1; i >= 0; --i)
+            if (m_bans[i].uid == uid) { m_bans.removeAt(i); ++removed; }
+        if (removed == 0) { err(s, 512, QStringLiteral("banimento nao encontrado")); return; }
+        saveBans();
+        ok(s);
+        return;
+    }
+
+    if (cmd == QLatin1String("gm")) {
+        const QString text = args.value(QStringLiteral("msg"));
+        if (text.isEmpty()) { err(s, 1538, QStringLiteral("mensagem vazia")); return; }
+        QJsonObject m = HProto::msg("chat");
+        m["scope"] = QStringLiteral("server");
+        m["from"] = 0;
+        m["fromName"] = QStringLiteral("ServerQuery (admin)");
+        m["text"] = text.left(1024);
+        broadcast(m);
+        log(QStringLiteral("ServerQuery gm: %1").arg(text));
+        ok(s);
+        return;
+    }
+
+    err(s, 256, QStringLiteral("comando nao implementado"));
 }

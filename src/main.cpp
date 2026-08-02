@@ -7,6 +7,7 @@
 #include <QTextStream>
 #include <csignal>
 #include "ServerCore.h"
+#include "ServerQuery.h"
 
 // Halla Server — servidor de voz/chat hospedável, compatível com o cliente Halla.
 // Uso:  halla-server [--config halla-server.ini] [--port 9987]
@@ -18,7 +19,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     g_app = &app;
     QCoreApplication::setApplicationName("Halla Server");
-    QCoreApplication::setApplicationVersion("2.0.0");
+    QCoreApplication::setApplicationVersion("3.1.0");
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -78,7 +79,7 @@ int main(int argc, char* argv[]) {
     core.setAdminPassword(adminPassword);
     core.setPrivilegeKeys(privKeys);
     core.setPrivilegeKeyReuse(privKeyReuse);
-    core.setVersion(QStringLiteral("3.0.0"));
+    core.setVersion(QStringLiteral("3.1.0"));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
 
@@ -90,6 +91,36 @@ int main(int argc, char* argv[]) {
     std::signal(SIGTERM, handleSignal);
 
     if (!core.start(port, port)) return 1;
+
+    // ---- ServerQuery (administração remota em texto, estilo TS3)
+    cfg.beginGroup("query");
+    const quint16 queryPort = quint16(cfg.value("port", 10011).toUInt());
+    const QString queryUser = cfg.value("user", "serveradmin").toString();
+    QString queryPass = cfg.value("password", "").toString();
+    cfg.endGroup();
+    if (queryPass.isEmpty()) queryPass = core.queryPassword(); // persistida em halla-data.json
+
+    if (queryPort > 0) {
+        ServerQuery* query = new ServerQuery(&core, &app);
+        query->setCredentials(queryUser, queryPass);
+        if (query->start(queryPort)) {
+            out << QStringLiteral("ServerQuery escutando na porta %1 (usuário: %2)\n")
+                       .arg(queryPort).arg(queryUser);
+            const QString finalPass = query->generatedPassword();
+            if (finalPass != queryPass) {
+                // primeira execução: mostra a senha gerada e a persiste
+                core.setQueryPassword(finalPass);
+                out << QStringLiteral("=====================================================\n"
+                                      "  SENHA DO SERVERQUERY (guarde-a!): %1\n"
+                                      "  Ela fica salva em halla-data.json\n"
+                                      "=====================================================\n")
+                           .arg(finalPass);
+            }
+        } else {
+            out << QStringLiteral("FALHA: ServerQuery não pôde escutar na porta %1\n")
+                       .arg(queryPort);
+        }
+    }
 
     out.flush();
     return app.exec();

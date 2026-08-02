@@ -26,6 +26,7 @@ ServerCore::~ServerCore() {
 }
 
 bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
+    m_controlPort = controlPort;
     loadData();
     loadBans();
     loadAvatars();
@@ -198,6 +199,8 @@ void ServerCore::loadData() {
         rc.lastSeen = QDateTime::fromString(o["last"].toString(), Qt::ISODate);
         m_registry[it.key()] = rc;
     }
+    // ServerQuery: senha persistida (gerada na 1ª execução)
+    m_queryPass = root["queryPass"].toString();
     // v3: reclamações
     for (const QJsonValue& v : root["complaints"].toArray()) {
         const QJsonObject o = v.toObject();
@@ -287,6 +290,7 @@ void ServerCore::saveData() {
     root["complaints"] = complaints;
     root["offline"] = offline;
     root["files"] = files;
+    if (!m_queryPass.isEmpty()) root["queryPass"] = m_queryPass;
     QFile f(m_dataFile);
     if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }

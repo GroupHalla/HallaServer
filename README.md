@@ -40,6 +40,10 @@ Servidor de voz e chat auto-hospedável da família Halla — seu próprio
   usuários, independente dos canais
 - **Transferência de arquivos por canal** (v3): upload/download/exclusão de
   arquivos por canal, persistidos no disco do servidor
+- **ServerQuery** (v3.1): administração remota em modo texto (estilo
+  TeamSpeak 3 ServerQuery) na porta 10011 — `login`, `serverinfo`,
+  `clientlist`, `channellist`, `clientkick`, `banclient`/`banadd`/`banlist`/
+  `bandel` e `gm` (mensagem global). Senha gerada na 1ª execução
 - **Multi-plataforma**: Linux e Windows (64-bit)
 
 Feito para ser usado com o cliente **[Halla](https://github.com/farleybarbosa320-oss/Halla)**,
@@ -51,14 +55,14 @@ qualquer linguagem (JSON sobre TCP + UDP para voz).
 ### Linux
 
 ```bash
-tar xf halla-server-3.0.0-linux-x64.tar.gz
+tar xf halla-server-3.1.0-linux-x64.tar.gz
 cd halla-server
 ./halla-server --config halla-server.ini
 ```
 
 ### Windows
 
-Baixe `halla-server-3.0.0-win64.zip`, extraia e execute:
+Baixe `halla-server-3.1.0-win64.zip`, extraia e execute:
 
 ```
 halla-server.exe
@@ -123,9 +127,9 @@ cmake --build build-win
 ## Testes
 
 O repositório inclui o `halla-nettest`, que sobe vários clientes simulados e
-valida **71 cenários** do protocolo (login, chat, canais, poke, permissões,
+valida **83 cenários** do protocolo (login, chat, canais, poke, permissões,
 relay de voz, ban/listas, grupos, operadores de canal, avatares, mensagens
-offline, reclamações, sussurro e transferência de arquivos…):
+offline, reclamações, sussurro, transferência de arquivos e ServerQuery…):
 
 ```bash
 ./build/halla-server --port 9987 &
