@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.17-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-${{ github.ref_name }}-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.17-win64.zip
+          path: halla-server-${{ github.ref_name }}-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -138,13 +138,13 @@ jobs:
             done
           done
           
-          tar -czf halla-server-3.2.17-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-${{ github.ref_name }}-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.17-linux-x64.tar.gz
+          path: halla-server-${{ github.ref_name }}-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -164,17 +164,20 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.17
-          name: Halla Server 3.2.17 — Proteção e Correção de Slots no Pterodactyl
+          tag_name: ${{ github.ref_name }}
+          name: Halla Server ${{ github.ref_name }} — Sincronia de Árvores de Canais e Voz
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.17-win64.zip
-            halla-server-3.2.17-linux-x64.tar.gz
+            halla-server-${{ github.ref_name }}-win64.zip
+            halla-server-${{ github.ref_name }}-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.17
+            ## 🚀 Novidades e Melhorias do Halla Server ${{ github.ref_name }}
 
-            Esta release corrige em definitivo o problema de slots zerados (0 slots / servidor cheio) na inicialização do Pterodactyl e implementa travas robustas de segurança!
+            Esta release corrige em definitivo o problema de sincronização gráfica de usuários na árvore de canais.
 
-            ### 🛡️ Proteção de Inicialização e Fallback de Slots
-            * **Evitando Slots Zerados:** Adicionada uma proteção de baixo nível na leitura de argumentos. Agora, se o parâmetro `--max` do Pterodactyl for passado vazio, zerado ou inválido, o servidor automaticamente assume o fallback padrão de **32 slots** (em vez de fechar as conexões por servidor cheio), garantindo funcionamento imediato!
+            ### 📁 Sincronização de Canais e Movimentação Inicial
+            * **Correção de Visibilidade:** O servidor agora envia um sinalizador `"user_moved"` explícito para o canal padrão assim que o login é confirmado. Isso faz com que todos os outros clientes (como o do PC e o do Celular) enxerguem o novo usuário conectado instantaneamente no Canal 1!
+            * **Suporte Modular Completo:** Totalmente portátil sob painéis Pterodactyl Debian Yolks.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
