@@ -19,7 +19,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     g_app = &app;
     QCoreApplication::setApplicationName("Halla Server");
-    QCoreApplication::setApplicationVersion("3.2.16");
+    QCoreApplication::setApplicationVersion("3.2.17");
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -56,9 +56,8 @@ int main(int argc, char* argv[]) {
             ? parser.value(nameOpt)
             : cfg.value("name", "Servidor Halla").toString();
     const QString motd = cfg.value("motd", "Bem-vindo ao servidor Halla!").toString();
-    const int maxClients = parser.isSet(maxOpt)
-            ? parser.value(maxOpt).toInt()
-            : cfg.value("maxClients", 32).toInt();
+    const int parsedMax = parser.isSet(maxOpt) ? parser.value(maxOpt).toInt() : 0;
+    const int maxClients = (parsedMax <= 0) ? cfg.value("maxClients", 32).toInt() : parsedMax;
     const QString password = parser.isSet(passOpt)
             ? parser.value(passOpt)
             : cfg.value("password", "").toString();
@@ -88,7 +87,7 @@ int main(int argc, char* argv[]) {
     core.setAdminPassword(adminPassword);
     core.setPrivilegeKeys(privKeys);
     core.setPrivilegeKeyReuse(privKeyReuse);
-    core.setVersion(QStringLiteral("3.2.16"));
+    core.setVersion(QStringLiteral("3.2.17"));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
     core.setDatabaseFile(dir + "/halla-data.db");

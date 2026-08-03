@@ -70,7 +70,7 @@ public:
     // config
     void setServerName(const QString& n)    { m_name = n; }
     void setMotd(const QString& m)          { m_motd = m; }
-    void setMaxClients(int n)               { m_maxClients = n; }
+    void setMaxClients(int n)               { m_maxClients = (n <= 0) ? 32 : n; }
     void setPassword(const QString& p)      { m_password = p; }
     void setAdminPassword(const QString& p) { m_adminPassword = p; }
     void setPrivilegeKeys(const QStringList& keys);
