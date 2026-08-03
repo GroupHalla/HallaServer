@@ -226,6 +226,7 @@ private:
     void handleAvatarSet(ClientSession* c, const QJsonObject& obj);
     void handleAvatarGet(ClientSession* c, const QJsonObject& obj);
     void handleIconGet(ClientSession* c, const QJsonObject& obj);
+    void handleIconSet(ClientSession* c, const QJsonObject& obj);
     void handleOfflineSend(ClientSession* c, const QJsonObject& obj);
     void handleComplaintAdd(ClientSession* c, const QJsonObject& obj);
     void handleComplaintList(ClientSession* c);

@@ -903,6 +903,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "avatar_set")     handleAvatarSet(c, obj);
     else if (t == "avatar_get")     handleAvatarGet(c, obj);
     else if (t == "icon_get")       handleIconGet(c, obj);
+    else if (t == "icon_set")       handleIconSet(c, obj);
     else if (t == "offline_send")   handleOfflineSend(c, obj);
     else if (t == "complaint_add")  handleComplaintAdd(c, obj);
     else if (t == "complaint_list") handleComplaintList(c);
@@ -1489,12 +1490,18 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         }
         if (obj.contains("name") && !name.isEmpty()) g.name = name;
         if (obj.contains("perms")) g.perms = perms;
+        if (obj.contains("sigla")) g.sigla = obj["sigla"].toString();
+        if (obj.contains("order")) g.order = obj["order"].toInt(0);
+        if (obj.contains("icon")) g.icon = obj["icon"].toString();
         m_groups[id] = g;
     } else {
         if (name.isEmpty()) return; // criação exige nome
         g.id = m_nextGroupId++;
         g.name = name;
         g.perms = perms;
+        g.sigla = obj["sigla"].toString();
+        g.order = obj["order"].toInt(0);
+        g.icon = obj["icon"].toString();
         if (g.perms.value("*").toBool() && !hasPerm(c, "*")) {
             sendError(c, "no_permission", "Apenas administradores (*) criam grupos com *");
             return;
@@ -1502,12 +1509,20 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         m_groups[g.id] = g;
     }
     saveData();
-    // clientes com este grupo mudam de rótulo se o nome mudou
+    // clientes com este grupo mudam de rótulo se as propriedades mudaram
     for (ClientSession* o : m_clients)
         if (o->groupId() == g.id) {
             o->setGroup(g.name);
+            o->setSigla(g.sigla);
+            o->setIcon(g.icon);
+            o->setGroupOrder(g.order);
             QJsonObject m = HProto::msg("user_group");
-            m["id"] = o->id(); m["group"] = o->group(); m["gid"] = g.id;
+            m["id"] = o->id(); 
+            m["group"] = o->group(); 
+            m["gid"] = g.id;
+            m["sigla"] = g.sigla;
+            m["icon"] = g.icon;
+            m["order"] = g.order;
             broadcast(m);
         }
     broadcastGroups();

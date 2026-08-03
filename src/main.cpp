@@ -19,7 +19,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     g_app = &app;
     QCoreApplication::setApplicationName("Halla Server");
-    QCoreApplication::setApplicationVersion("3.2.7");
+    QCoreApplication::setApplicationVersion("3.2.8");
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -88,7 +88,7 @@ int main(int argc, char* argv[]) {
     core.setAdminPassword(adminPassword);
     core.setPrivilegeKeys(privKeys);
     core.setPrivilegeKeyReuse(privKeyReuse);
-    core.setVersion(QStringLiteral("3.2.7"));
+    core.setVersion(QStringLiteral("3.2.8"));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
     core.setDatabaseFile(dir + "/halla-data.db");

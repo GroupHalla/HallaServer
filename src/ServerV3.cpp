@@ -69,6 +69,35 @@ void ServerCore::handleIconGet(ClientSession* c, const QJsonObject& obj) {
     c->send(m);
 }
 
+void ServerCore::handleIconSet(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "groupEdit")) {
+        sendError(c, "no_permission", "Sem permissão para gerenciar ícones de grupos");
+        return;
+    }
+    const QString name = obj["name"].toString();
+    const QByteArray data = QByteArray::fromBase64(obj["data"].toString().toLatin1());
+    
+    if (name.isEmpty() || data.isEmpty()) return;
+    if (data.size() > 65536) { // 64 KiB limit
+        sendError(c, "icon_too_big", "O ícone excede 64 KiB");
+        return;
+    }
+    
+    QDir().mkpath(dataDir() + QStringLiteral("/icons"));
+    QFile f(iconPath(name));
+    if (f.open(QIODevice::WriteOnly)) {
+        f.write(data);
+        f.close();
+        log(QStringLiteral("Ícone customizado \"%1\" enviado por %2").arg(name, c->name()));
+        
+        QJsonObject m = HProto::msg("icon_uploaded");
+        m["name"] = name;
+        broadcast(m);
+    } else {
+        sendError(c, "io_error", "Não foi possível salvar o ícone no servidor");
+    }
+}
+
 // ===================================================== MENSAGENS OFFLINE (v3)
 void ServerCore::handleOfflineSend(ClientSession* c, const QJsonObject& obj) {
     const QString toUid = obj["uid"].toString();
