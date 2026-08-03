@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.11-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.12-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.11-win64.zip
+          path: halla-server-3.2.12-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -112,13 +112,13 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.11-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-3.2.12-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.11-linux-x64.tar.gz
+          path: halla-server-3.2.12-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -138,20 +138,20 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.11
-          name: Halla Server 3.2.11 — Permissões de Canais e Bitrate
+          tag_name: v3.2.12
+          name: Halla Server 3.2.12 — Suporte ao Pterodactyl e Auto-Update
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.11-win64.zip
-            halla-server-3.2.11-linux-x64.tar.gz
+            halla-server-3.2.12-win64.zip
+            halla-server-3.2.12-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.11
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.12
 
-            Esta release adiciona suporte completo para controle de Bitrate por sala e introduz o motor de restrições de permissões específicas de canais!
+            Esta release introduz o suporte nativo para hospedagem sob painéis **Pterodactyl** e o novo mecanismo autônomo de auto-atualização do servidor!
 
-            ### 🛡️ Permissões Granulares por Canal
-            * **Segurança Reforçada:** O servidor agora valida em tempo real permissões específicas configuradas no canal para cada grupo de usuários: bloqueio/permissão de entrada (`join`), fala (`talk`), sussurro (`whisper`), chat de texto (`text_chat`), e transferências de arquivos (`file_upload`/`file_download`)!
+            ### 🦖 Suporte Nativo ao Pterodactyl (Egg Exportado)
+            * **Pterodactyl Egg:** Adicionado o arquivo de importação do Egg oficial `pterodactyl/egg-halla-server.json` configurado de fábrica com Docker yolks Debian robustos, variáveis de ambiente simplificadas e scripts de instalação limpos!
 
-            ### 🎚️ Sincronização de Bitrate por Canal
-            * **Bitrate Individual:** Canais agora armazenam e transmitem o Bitrate de Opus configurado (de 16 kbps a 96 kbps), garantindo qualidade superior de áudio e otimização dinâmica de tráfego de rede!
+            ### 🔄 Sistema de Auto-Atualização Integrado na Inicialização
+            * **Atualização Autônoma:** Adicionado o wrapper de inicialização `pterodactyl/start.sh`. Toda vez que o servidor for ligado, ele consulta a API do GitHub, verifica se existe uma nova versão estável lançada e, se disponível, baixa, extrai e aplica a atualização do binário automaticamente antes de ligar!

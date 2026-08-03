@@ -1,0 +1,61 @@
+{
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-03T00:10:00-03:00",
+    "name": "Halla Server",
+    "author": "farleybarbosa320-oss@users.noreply.github.com",
+    "description": "Servidor de comunicação de voz e chat nativo de alta fidelidade e baixíssima latência compatível com o cliente Halla. Possui atualizador automático integrado na inicialização e persistência SQL robusta.",
+    "features": null,
+    "docker_images": {
+        "ghcr.io/parkervcp/yolks:debian": "ghcr.io/parkervcp/yolks:debian"
+    },
+    "file_denylist": [],
+    "startup": "bash pterodactyl/start.sh --port {{SERVER_PORT}} --max {{MAX_CLIENTS}} --name \"{{SERVER_NAME}}\"",
+    "config": {
+        "files": "{}",
+        "startup": "{\r\n    \"done\": \"Servidor \\\"\"\r\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "container": "debian:stable-slim",
+            "entrypoint": "bash",
+            "script": "#!/bin/bash\r\n# Instalação inicial do Egg do Halla Server\r\napt-get update\r\napt-get install -y curl tar\r\n\r\nmkdir -p /mnt/server/pterodactyl\r\ncd /mnt/server\r\n\r\n# Copia o script de inicialização padrão caso necessário\r\necho \"Instando Egg...\""
+        }
+    },
+    "variables": [
+        {
+            "name": "Porta do Servidor",
+            "description": "A porta TCP/UDP que o servidor Halla escutará para controle e transmissão de voz (Padrão: 9987).",
+            "env_var": "SERVER_PORT",
+            "default_value": "9987",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|between:1,65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Nome do Servidor",
+            "description": "O nome exibido no topo da árvore de canais para todos os clientes conectados.",
+            "env_var": "SERVER_NAME",
+            "default_value": "Meu Servidor Halla",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:40",
+            "field_type": "text"
+        },
+        {
+            "name": "Slots Máximos",
+            "description": "O número máximo de clientes simultâneos permitidos no servidor.",
+            "env_var": "MAX_CLIENTS",
+            "default_value": "32",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|between:1,1000",
+            "field_type": "text"
+        }
+    ]
+}
