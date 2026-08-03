@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.8-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.9-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.8-win64.zip
+          path: halla-server-3.2.9-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -112,13 +112,13 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.8-linux-x64.tar.gz halla-server-linux/
+          tar -czf halla-server-3.2.9-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.8-linux-x64.tar.gz
+          path: halla-server-3.2.9-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -138,23 +138,19 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.8
-          name: Halla Server 3.2.8 — Envio de Ícones Nativos e Persistência
+          tag_name: v3.2.9
+          name: Halla Server 3.2.9 — Sinalização de Sussurro Laranja
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.8-win64.zip
-            halla-server-3.2.8-linux-x64.tar.gz
+            halla-server-3.2.9-win64.zip
+            halla-server-3.2.9-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.8
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.9
 
-            Esta release corrige em definitivo a persistência de chaves de privilégio em MySQL, e adiciona suporte ao envio e upload de ícones PNG de cargos do próprio cliente para o servidor!
+            Esta release implementa a detecção de sussurros e a sinalização visual de voz na cor laranja!
 
-            ### 🖼️ Upload Nativo de Ícones PNG de Cargos
-            * **Recepção em Base64:** Implementado o tratamento de mensagens `"icon_set"`. O servidor agora recebe imagens PNG de cargos diretamente do cliente, valida seu tamanho (limite de 64 KiB), salva na pasta `/icons/` e notifica os clientes conectados para atualização em tempo real!
-
-            ### 💾 Persistência SQL e Bypass Completo de Administrador
-            * **Transações Blindadas:** Corrigido o rollback silencioso em MySQL causado por conflitos de palavras reservadas, garantindo que as permissões de chave de privilégio sejam persistidas de forma definitiva.
-            * **Bypass de Permissões:** Administradores e nicknames `"serveradmin"` possuem liberação total de todos os recursos (criar canais, gerenciar e atribuir grupos) sem restrições!
+            ### 🍊 Sinalização de Sussurro Laranja (Estilo TS3)
+            * **Sincronia de Estado:** O servidor agora detecta quando um usuário está falando através do protocolo de sussurros e transmite o estado `"whispering"` para os destinatários selecionados, permitindo que a interface mude o círculo de voz do usuário para laranja em tempo real!
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

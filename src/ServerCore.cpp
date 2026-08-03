@@ -1163,6 +1163,7 @@ void ServerCore::handleTalking(ClientSession* c, const QJsonObject& obj) {
         QJsonObject u = HProto::msg("user_state");
         u["id"] = c->id();
         u["talking"] = on;
+        u["whispering"] = (on && !c->whisperIds().isEmpty());
         broadcast(u, c->id());
     }
 }
