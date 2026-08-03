@@ -78,13 +78,13 @@ jobs:
 
       - name: Zip Windows Release
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.12-win64.zip
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-3.2.13-win64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-windows
-          path: halla-server-3.2.12-win64.zip
+          path: halla-server-3.2.13-win64.zip
 
   build-linux:
     name: Build Linux Server
@@ -112,13 +112,33 @@ jobs:
           mkdir -p halla-server-linux
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
-          tar -czf halla-server-3.2.12-linux-x64.tar.gz halla-server-linux/
+          
+          # Resolvendo recursivamente dependências de bibliotecas dinâmicas do Linux (.so) do Qt6 e ICU!
+          echo ">> Resolvendo e copiando dependências de .so do sistema..."
+          COPIED=true
+          while [ "$COPIED" = true ]; do
+            COPIED=false
+            for f in $(find halla-server-linux -type f \( -executable -o -name "*.so*" \)); do
+              for dep in $(ldd "$f" | grep -E "libQt6|libdouble-conversion|libicu" | awk '{print $3}'); do
+                if [ ! -z "$dep" ] && [ -f "$dep" ]; then
+                  dep_name=$(basename "$dep")
+                  if [ ! -f "halla-server-linux/$dep_name" ]; then
+                    echo "Copiando biblioteca encontrada: $dep_name de $dep"
+                    cp "$dep" halla-server-linux/
+                    COPIED=true
+                  fi
+                fi
+              done
+            done
+          done
+          
+          tar -czf halla-server-3.2.13-linux-x64.tar.gz halla-server-linux/
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: halla-server-linux
-          path: halla-server-3.2.12-linux-x64.tar.gz
+          path: halla-server-3.2.13-linux-x64.tar.gz
 
   release:
     name: Create GitHub Release
@@ -138,20 +158,18 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.12
-          name: Halla Server 3.2.12 — Suporte ao Pterodactyl e Auto-Update
+          tag_name: v3.2.13
+          name: Halla Server 3.2.13 — Auto-Suficiente com Biblioteca de Tempo de Execução
           draft: false
           prerelease: false
           files: |
-            halla-server-3.2.12-win64.zip
-            halla-server-3.2.12-linux-x64.tar.gz
+            halla-server-3.2.13-win64.zip
+            halla-server-3.2.13-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server 3.2.12
+            ## 🚀 Novidades e Melhorias do Halla Server 3.2.13
 
-            Esta release introduz o suporte nativo para hospedagem sob painéis **Pterodactyl** e o novo mecanismo autônomo de auto-atualização do servidor!
+            Esta release corrige os erros de dependências de bibliotecas dinâmicas de Qt6 (`libQt6Network.so.6` ausente) em hospedagens Linux puras e painéis Pterodactyl, tornando o executável 100% auto-suficiente e portátil!
 
-            ### 🦖 Suporte Nativo ao Pterodactyl (Egg Exportado)
-            * **Pterodactyl Egg:** Adicionado o arquivo de importação do Egg oficial `pterodactyl/egg-halla-server.json` configurado de fábrica com Docker yolks Debian robustos, variáveis de ambiente simplificadas e scripts de instalação limpos!
-
-            ### 🔄 Sistema de Auto-Atualização Integrado na Inicialização
-            * **Atualização Autônoma:** Adicionado o wrapper de inicialização `pterodactyl/start.sh`. Toda vez que o servidor for ligado, ele consulta a API do GitHub, verifica se existe uma nova versão estável lançada e, se disponível, baixa, extrai e aplica a atualização do binário automaticamente antes de ligar!
+            ### 📦 Distribuição Auto-Suficiente com Shared Libraries (.so) do Linux
+            * **Resolvedor Dinâmico .so:** Implementamos um resolvedor recursivo de bibliotecas dinâmicas que empacota todas as `.so` essenciais (Qt6, ICU e Double Conversion) diretamente dentro do pacote Linux `tar.gz` de fábrica!
+            * **Compatibilidade Pterodactyl:** Garante que o servidor ligue com sucesso em qualquer contêiner leve de Debian/Ubuntu sem necessitar de instalações manuais de pacotes!

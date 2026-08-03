@@ -65,7 +65,7 @@ if [ -f "$BINARY" ]; then
     chmod +x "$BINARY"
     echo ">> Iniciando Halla Server..."
     echo "================================================================="
-    exec "$BINARY" "$@"
+    exec env LD_LIBRARY_PATH=. "$BINARY" "$@"
 else
     echo ">> ERRO CRÍTICO: O binário halla-server não foi encontrado e não pôde ser baixado!"
     exit 1
