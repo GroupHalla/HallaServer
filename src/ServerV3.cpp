@@ -189,6 +189,10 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleFtUpload(ClientSession* c, const QJsonObject& obj) {
     const int chan = obj["channel"].toInt();
     if (!m_channels.contains(chan)) return;
+    if (!hasChannelPerm(c, chan, "file_upload")) {
+        sendError(c, "no_permission", "Sem permissão para enviar arquivos neste canal");
+        return;
+    }
     if (c->groupId() == 1 && !hasPerm(c, "*")) { // convidado não envia arquivos
         sendError(c, "no_permission", "Convidados não podem enviar arquivos");
         return;
@@ -245,6 +249,10 @@ void ServerCore::handleFtList(ClientSession* c, const QJsonObject& obj) {
 
 void ServerCore::handleFtDownload(ClientSession* c, const QJsonObject& obj) {
     const int chan = obj["channel"].toInt();
+    if (!hasChannelPerm(c, chan, "file_download")) {
+        sendError(c, "no_permission", "Sem permissão para baixar arquivos neste canal");
+        return;
+    }
     const QString name = sanitizeFileName(obj["name"].toString());
     QFile f(filesDir(chan) + QLatin1Char('/') + name);
     if (!f.open(QIODevice::ReadOnly)) {

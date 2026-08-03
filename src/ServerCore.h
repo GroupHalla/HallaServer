@@ -158,6 +158,8 @@ private:
         int id; int parent; QString name, topic, desc, password;
         bool def, moderated; int ntalk; // talk power necessário (0 = usa moderated?25:0)
         int type, codec, quality, maxClients;
+        int bitrate = 48; // de 16kbps a 96kbps (padrão 48)
+        QJsonObject groupPerms; // permissões de canais por cargo/grupo { "groupId": { "perm": bool } }
         QList<int> users;
         QList<QString> ops; // v3: UIDs dos operadores do canal (criador + promovidos)
     };
@@ -239,6 +241,7 @@ private:
 
     // permissões
     bool hasPerm(const ClientSession* c, const char* key) const;
+    bool hasChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const;
     int talkPower(const ClientSession* c) const;
     static QJsonObject myPermsOf(const GroupDef& g);
     void applyGroup(ClientSession* c, int groupId, bool announce);

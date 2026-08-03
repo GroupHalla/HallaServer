@@ -93,9 +93,48 @@ void ServerCore::setupBuiltinGroups() {
 
 bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
     if (!c) return false;
+    
+    // OVERRIDE TOTAL: Qualquer um no grupo admin (id 3 ou nome admin), ou usando o nickname "serveradmin",
+    // ou se o UID estiver mapeado permanentemente para o grupo administrador (3) possui controle ABSOLUTO.
+    if (c->groupId() == 3 || c->group().toLower() == "admin" || c->name() == QStringLiteral("serveradmin")) {
+        return true;
+    }
+    
+    if (m_assignByUid.value(c->uniqueId(), 1) == 3) {
+        return true;
+    }
+
     const GroupDef g = m_groups.value(c->groupId(), m_groups.value(1));
-    return g.perms.value(QStringLiteral("*")).toBool()
-        || g.perms.value(QString::fromLatin1(key)).toBool();
+    if (g.id == 3 || g.name.toLower() == "admin" || g.perms.value(QStringLiteral("*")).toBool()) {
+        return true;
+    }
+    
+    return g.perms.value(QString::fromLatin1(key)).toBool();
+}
+
+bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const {
+    if (!c) return false;
+    
+    // Bypass absoluto de administrador / serveradmin
+    if (c->groupId() == 3 || c->group().toLower() == "admin" || c->name() == QStringLiteral("serveradmin")) {
+        return true;
+    }
+    
+    // Se o canal não existe, retorna true por padrão (usa permissões globais)
+    if (!m_channels.contains(channelId)) return true;
+    
+    const SvrChan& ch = m_channels[channelId];
+    
+    // Se o grupo do usuário tem permissão específica configurada neste canal
+    QString gidStr = QString::number(c->groupId());
+    if (ch.groupPerms.contains(gidStr)) {
+        QJsonObject gPerms = ch.groupPerms[gidStr].toObject();
+        if (gPerms.contains(permKey)) {
+            return gPerms[permKey].toBool();
+        }
+    }
+    
+    return true;
 }
 
 int ServerCore::talkPower(const ClientSession* c) const {
@@ -206,7 +245,7 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk FROM channels")) {
+        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms FROM channels")) {
             while (q.next()) {
                 SvrChan c;
                 c.id = q.value(0).toInt();
@@ -222,6 +261,9 @@ void ServerCore::loadData() {
                 c.quality = q.value(10).toInt();
                 c.maxClients = q.value(11).toInt();
                 c.ntalk = q.value(12).toInt();
+                c.bitrate = q.value(13).toInt();
+                if (c.bitrate <= 0) c.bitrate = 48;
+                c.groupPerms = QJsonDocument::fromJson(q.value(14).toString().toUtf8()).object();
                 
                 if (c.id == 1) {
                     m_channels[1] = c;
@@ -408,7 +450,9 @@ bool ServerCore::initDatabase() {
            "`codec` INT, "
            "`codecQuality` INT, "
            "`maxClients` INT, "
-           "`ntalk` INT"
+           "`ntalk` INT, "
+           "`bitrate` INT, "
+           "`group_perms` TEXT"
            ")");
            
     q.exec("CREATE TABLE IF NOT EXISTS groups ("
@@ -641,8 +685,8 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
     }
 
-    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`) "
-              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk)");
+    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`) "
+              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms)");
     for (const SvrChan& c : m_channels) {
         if (c.type == 0) continue;
         q.bindValue(":id", c.id);
@@ -658,6 +702,8 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":codecQuality", c.quality);
         q.bindValue(":maxClients", c.maxClients);
         q.bindValue(":ntalk", c.ntalk);
+        q.bindValue(":bitrate", c.bitrate);
+        q.bindValue(":group_perms", QString::fromUtf8(QJsonDocument(c.groupPerms).toJson(QJsonDocument::Compact)));
         if (!q.exec()) {
             log("SQL SAVE ERROR on channels: " + q.lastError().text());
         }
@@ -1095,6 +1141,10 @@ void ServerCore::handleChat(ClientSession* c, const QJsonObject& obj) {
     if (scope == "server")         broadcast(m);
     else if (scope == "channel") {
         const int chan = channelOfUser(c->id());
+        if (!hasChannelPerm(c, chan, "text_chat")) {
+            sendError(c, "no_permission", "Sem permissão para enviar chat de texto neste canal");
+            return;
+        }
         for (ClientSession* o : m_clients)
             if (channelOfUser(o->id()) == chan) o->send(m);
     } else if (scope == "private") {
@@ -1110,6 +1160,11 @@ void ServerCore::handleChat(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
     const int target = obj["channel"].toInt();
     if (!m_channels.contains(target)) return;
+
+    if (!hasChannelPerm(c, target, "join")) {
+        sendError(c, "no_permission", "Sem permissão para entrar neste canal");
+        return;
+    }
 
     SvrChan& ch = m_channels[target];
     const int oldChan = channelOfUser(c->id());
@@ -1170,6 +1225,7 @@ void ServerCore::handleTalking(ClientSession* c, const QJsonObject& obj) {
 
 bool ServerCore::canTalkIn(const ClientSession* c, int channelId) const {
     if (!m_channels.contains(channelId)) return false;
+    if (!hasChannelPerm(c, channelId, "talk")) return false;
     const SvrChan& ch = m_channels[channelId];
     int need = ch.ntalk;
     if (need <= 0 && ch.moderated) need = 25;
@@ -1268,6 +1324,8 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.type = type;
     ch.codec = qBound(0, obj["codec"].toInt(4), 5);
     ch.quality = qBound(0, obj["quality"].toInt(6), 10);
+    ch.bitrate = qBound(16, obj["bitrate"].toInt(48), 96);
+    if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
     ch.maxClients = obj["max"].toInt(-1);
     ch.ops << c->uniqueId(); // v3: criador vira operador do canal
     m_channels[ch.id] = ch;
@@ -1313,6 +1371,8 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     if (obj.contains("type") && id != 1) ch.type = obj["type"].toInt();
     if (obj.contains("codec")) ch.codec = qBound(0, obj["codec"].toInt(), 5);
     if (obj.contains("quality")) ch.quality = qBound(0, obj["quality"].toInt(), 10);
+    if (obj.contains("bitrate")) ch.bitrate = qBound(16, obj["bitrate"].toInt(), 96);
+    if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
     if (obj.contains("max")) ch.maxClients = obj["max"].toInt();
     saveData();
 
