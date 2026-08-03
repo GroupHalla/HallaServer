@@ -1078,6 +1078,13 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     QJsonObject joined = HProto::msg("user_joined");
     joined["user"] = c->toJson();
     broadcast(joined, c->id());
+
+    // v3: Envia uma sinalização explícita de movimento para o canal padrão (1) 
+    // para que todos os outros clientes saibam onde colocar o novo usuário na árvore.
+    QJsonObject moved = HProto::msg("user_moved");
+    moved["id"] = c->id();
+    moved["channel"] = 1;
+    broadcast(moved);
 }
 
 void ServerCore::sendWelcome(ClientSession* c) {
