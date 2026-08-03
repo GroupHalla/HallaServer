@@ -1,61 +1,31 @@
 {
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
     "meta": {
         "version": "PTDL_v2",
         "update_url": null
     },
-    "exported_at": "2026-08-03T00:10:00-03:00",
+    "exported_at": "2026-08-03T17:29:56+02:00",
     "name": "Halla Server",
-    "author": "farleybarbosa320-oss@users.noreply.github.com",
-    "description": "Servidor de comunicação de voz e chat nativo de alta fidelidade e baixíssima latência compatível com o cliente Halla. Possui atualizador automático integrado na inicialização e persistência SQL robusta.",
-    "features": null,
+    "author": "grouphalla@gmail.com",
+    "description": "Servidor de comunica\u00e7\u00e3o de voz e chat nativo de alta fidelidade e lat\u00eancia ultrabaixa para o Halla. Possui atualiza\u00e7\u00e3o e download autom\u00e1tico 100% aut\u00f4nomo na inicializa\u00e7\u00e3o.",
+    "features": [],
     "docker_images": {
-        "ghcr.io/parkervcp/yolks:debian": "ghcr.io/parkervcp/yolks:debian"
+        "ghcr.io\/parkervcp\/yolks:debian": "ghcr.io\/parkervcp\/yolks:debian"
     },
     "file_denylist": [],
-    "startup": "bash pterodactyl/start.sh --port {{SERVER_PORT}} --max {{MAX_CLIENTS}} --name \"{{SERVER_NAME}}\"",
+    "startup": "LATEST_TAG=$(curl -s \"https:\/\/api.github.com\/repos\/farleybarbosa320-oss\/HallaServer\/releases\/latest\" | grep -oP '\"tag_name\": \"\\K[^\"]+'); if [ -n \"$LATEST_TAG\" ]; then LOCAL_TAG=$(cat version.txt 2>\/dev\/null || echo \"0.0.0\"); if [ \"$LATEST_TAG\" != \"$LOCAL_TAG\" ] || [ ! -f .\/halla-server ]; then echo \">> Nova vers\u00e3o detectada ou instalando inicial: $LATEST_TAG\"; echo \">> Baixando e atualizando...\"; curl -s \"https:\/\/api.github.com\/repos\/farleybarbosa320-oss\/HallaServer\/releases\/latest\" | grep -oP '\"browser_download_url\": \"\\K[^\"]+linux-x64\\.tar\\.gz' | xargs curl -L -o update.tar.gz && tar -xzf update.tar.gz --strip-components=1 && rm -f update.tar.gz && chmod +x .\/halla-server && echo \"$LATEST_TAG\" > version.txt; fi; fi; chmod +x .\/halla-server; env LD_LIBRARY_PATH=. .\/halla-server --port {{SERVER_PORT}} --max {{MAX_CLIENTS}} --name \"{{SERVER_NAME}}\"",
     "config": {
         "files": "{}",
-        "startup": "{\r\n    \"done\": \"Servidor \\\"\"\r\n}",
+        "startup": "{\r\n    \"done\": \"iniciado\"\r\n}",
         "logs": "{}",
         "stop": "^C"
     },
     "scripts": {
         "installation": {
-            "container": "debian:stable-slim",
-            "entrypoint": "bash",
-            "script": "#!/bin/bash\r\n# Instalação inicial do Egg do Halla Server\r\napt-get update\r\napt-get install -y curl tar\r\n\r\nmkdir -p /mnt/server/pterodactyl\r\ncd /mnt/server\r\n\r\n# Copia o script de inicialização padrão caso necessário\r\necho \"Instando Egg...\""
+            "script": null,
+            "container": "alpine:3.4",
+            "entrypoint": "ash"
         }
     },
-    "variables": [
-        {
-            "name": "Porta do Servidor",
-            "description": "A porta TCP/UDP que o servidor Halla escutará para controle e transmissão de voz (Padrão: 9987).",
-            "env_var": "SERVER_PORT",
-            "default_value": "9987",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|numeric|between:1,65535",
-            "field_type": "text"
-        },
-        {
-            "name": "Nome do Servidor",
-            "description": "O nome exibido no topo da árvore de canais para todos os clientes conectados.",
-            "env_var": "SERVER_NAME",
-            "default_value": "Meu Servidor Halla",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|max:40",
-            "field_type": "text"
-        },
-        {
-            "name": "Slots Máximos",
-            "description": "O número máximo de clientes simultâneos permitidos no servidor.",
-            "env_var": "MAX_CLIENTS",
-            "default_value": "32",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|numeric|between:1,1000",
-            "field_type": "text"
-        }
-    ]
+    "variables": []
 }
