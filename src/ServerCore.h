@@ -205,6 +205,7 @@ private:
     void handleChat(ClientSession* c, const QJsonObject& obj);
     void handleMove(ClientSession* c, const QJsonObject& obj);
     void handleMoveOther(ClientSession* c, const QJsonObject& obj);
+    void handleCommander(ClientSession* c, const QJsonObject& obj);
     void handleStatus(ClientSession* c, const QJsonObject& obj);
     void handleNick(ClientSession* c, const QJsonObject& obj);
     void handleDesc(ClientSession* c, const QJsonObject& obj);

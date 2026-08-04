@@ -80,7 +80,10 @@ void ServerCore::setupBuiltinGroups() {
     GroupDef admin;  admin.id = 3;  admin.name = "admin";
     admin.perms = QJsonObject{
         {"*", true}, {"kick", true}, {"ban", true}, {"banList", true},
-        {"move", true}, {"chanCreateTemp", true}, {"chanCreateSemi", true},
+        {"move", true}, {"setCommander", true}, {"selfCommander", true},
+        {"b_client_set_channel_commander", true},
+        {"b_client_is_channel_commander", true},
+        {"chanCreateTemp", true}, {"chanCreateSemi", true},
         {"chanCreatePerm", true}, {"chanEdit", true}, {"chanDelete", true},
         {"serverEdit", true}, {"groupEdit", true}, {"poke", true},
         {"privmsg", true}, {"ignoreChanPass", true}, {"ignoreTalkPower", true},
@@ -109,7 +112,8 @@ bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
         return true;
     }
     
-    return g.perms.value(QString::fromLatin1(key)).toBool();
+    const QJsonValue value = g.perms.value(QString::fromLatin1(key));
+    return value.toBool() || value.toInt(0) > 0;
 }
 
 bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const {
@@ -917,6 +921,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "chat")        handleChat(c, obj);
     else if (t == "move")        handleMove(c, obj);
     else if (t == "move_other")  handleMoveOther(c, obj);
+    else if (t == "commander")    handleCommander(c, obj);
     else if (t == "voice_hello") {
         if (!c->voiceToken()) {
             c->setVoiceToken(m_nextToken++);
@@ -1199,7 +1204,7 @@ void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
 }
 
 void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
-    if (!hasPerm(c, "move")) {
+    if (!hasPerm(c, "move") && !hasPerm(c, "i_client_move_power")) {
         sendError(c, "no_permission", "Sem permissão para mover clientes");
         return;
     }
@@ -1211,6 +1216,37 @@ void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
     QJsonObject m = HProto::msg("user_moved");
     m["id"] = id; m["channel"] = target; m["by"] = c->id();
     broadcast(m);
+}
+
+void ServerCore::handleCommander(ClientSession* c, const QJsonObject& obj) {
+    const int targetId = obj["id"].toInt(c->id());
+    const bool on = obj["on"].toBool();
+    if (!m_clients.contains(targetId)) return;
+
+    const bool selfPower = hasPerm(c, "selfCommander")
+        || hasPerm(c, "b_client_is_channel_commander")
+        || hasPerm(c, "setCommander")
+        || hasPerm(c, "b_client_set_channel_commander");
+    const bool otherPower = hasPerm(c, "setCommander")
+        || hasPerm(c, "b_client_set_channel_commander");
+    const bool allowed = targetId == c->id() ? selfPower : otherPower;
+    if (!allowed) {
+        sendError(c, "no_permission",
+                  targetId == c->id()
+                      ? "Sem permissão para ser comandante do canal"
+                      : "Sem permissão para definir o comandante de outro cliente");
+        return;
+    }
+
+    // O comando continua sendo uma ação de servidor, não um estado local
+    // falsificável enviado em "status". A mudança é refletida para todos.
+    ClientSession* target = m_clients.value(targetId);
+    target->setCommander(on);
+    QJsonObject u = HProto::msg("user_state");
+    u["id"] = targetId;
+    u["cc"] = on;
+    u["by"] = c->id();
+    broadcast(u);
 }
 
 void ServerCore::handleTalking(ClientSession* c, const QJsonObject& obj) {
@@ -1246,7 +1282,18 @@ void ServerCore::handleStatus(ClientSession* c, const QJsonObject& obj) {
     if (obj.contains("spk"))  c->setSpkMuted(obj["spk"].toBool());
     if (obj.contains("away")) c->setAway(obj["away"].toBool());
     if (obj.contains("rec"))  c->setRecording(obj["rec"].toBool());
-    if (obj.contains("cc"))   c->setCommander(obj["cc"].toBool());
+    if (obj.contains("cc")) {
+        const bool requested = obj["cc"].toBool();
+        const bool selfPower = hasPerm(c, "selfCommander")
+            || hasPerm(c, "b_client_is_channel_commander")
+            || hasPerm(c, "setCommander")
+            || hasPerm(c, "b_client_set_channel_commander");
+        if (!requested || selfPower) {
+            c->setCommander(requested);
+        } else {
+            sendError(c, "no_permission", "Sem permissão para ser comandante do canal");
+        }
+    }
 
     QJsonObject u = HProto::msg("user_state");
     u["id"] = c->id();
@@ -1255,7 +1302,7 @@ void ServerCore::handleStatus(ClientSession* c, const QJsonObject& obj) {
     u["away"] = c->away();
     u["rec"] = c->recording();
     u["cc"] = c->commander();
-    broadcast(u, c->id());
+    broadcast(u);
 }
 
 void ServerCore::handleNick(ClientSession* c, const QJsonObject& obj) {
