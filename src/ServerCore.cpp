@@ -200,7 +200,7 @@ void ServerCore::loadData() {
     setupBuiltinGroups();
 
     SvrChan def{1, 0, QStringLiteral("Canal padrão"), QString(), QString(), QString(),
-                true, false, 0, 2, 4, 6, -1, {}};
+                true, false, 0, 2, 4, 6, -1, 96};
     m_channels.insert(1, def);
     m_nextChanId = 2;
 
@@ -266,7 +266,7 @@ void ServerCore::loadData() {
                 c.maxClients = q.value(11).toInt();
                 c.ntalk = q.value(12).toInt();
                 c.bitrate = q.value(13).toInt();
-                if (c.bitrate <= 0) c.bitrate = 48;
+                if (c.bitrate <= 0) c.bitrate = 96;
                 c.groupPerms = QJsonDocument::fromJson(q.value(14).toString().toUtf8()).object();
                 
                 if (c.id == 1) {
@@ -569,6 +569,7 @@ void ServerCore::loadDataFromJson() {
             m_channels[1].ntalk = c.ntalk;
             m_channels[1].type = 2; m_channels[1].codec = c.codec; m_channels[1].quality = c.quality;
             m_channels[1].maxClients = c.maxClients;
+            m_channels[1].bitrate = c.bitrate;
             continue;
         }
         m_channels.insert(c.id, c);
@@ -1361,7 +1362,7 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
-    const QString name = obj["name"].toString().trimmed().left(40);
+    const QString name = obj["name"].toString().trimmed();
     if (name.isEmpty()) return;
 
     SvrChan ch;
@@ -1378,7 +1379,7 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.type = type;
     ch.codec = qBound(0, obj["codec"].toInt(4), 5);
     ch.quality = qBound(0, obj["quality"].toInt(6), 10);
-    ch.bitrate = qBound(16, obj["bitrate"].toInt(48), 96);
+    ch.bitrate = qBound(16, obj["bitrate"].toInt(96), 384);
     if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
     ch.maxClients = obj["max"].toInt(-1);
     ch.ops << c->uniqueId(); // v3: criador vira operador do canal
@@ -1416,7 +1417,7 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     SvrChan& ch = m_channels[id];
-    if (obj.contains("name")) ch.name = obj["name"].toString().trimmed().left(40);
+    if (obj.contains("name")) ch.name = obj["name"].toString().trimmed();
     if (obj.contains("topic")) ch.topic = obj["topic"].toString().left(80);
     if (obj.contains("desc")) ch.desc = obj["desc"].toString();
     if (obj.contains("pass")) ch.password = obj["pass"].toString();
@@ -1425,7 +1426,7 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     if (obj.contains("type") && id != 1) ch.type = obj["type"].toInt();
     if (obj.contains("codec")) ch.codec = qBound(0, obj["codec"].toInt(), 5);
     if (obj.contains("quality")) ch.quality = qBound(0, obj["quality"].toInt(), 10);
-    if (obj.contains("bitrate")) ch.bitrate = qBound(16, obj["bitrate"].toInt(), 96);
+    if (obj.contains("bitrate")) ch.bitrate = qBound(16, obj["bitrate"].toInt(96), 384);
     if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
     if (obj.contains("max")) ch.maxClients = obj["max"].toInt();
     saveData();
@@ -1787,6 +1788,7 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
     c.codec = o["codec"].toInt(4);
     c.quality = o["quality"].toInt(6);
     c.maxClients = o["max"].toInt(-1);
+    c.bitrate = qBound(16, o["bitrate"].toInt(96), 384);
     for (const QJsonValue& v : o["ops"].toArray()) c.ops << v.toString();
     return c;
 }
@@ -1796,6 +1798,7 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
                                      !c.password.isEmpty(), c.id == 1, c.type, c.moderated,
                                      c.codec, c.quality, c.maxClients, c.users);
     j["ntalk"] = c.ntalk;
+    j["bitrate"] = c.bitrate;
     QJsonArray ops;
     for (const QString& u : c.ops) ops << u;
     j["ops"] = ops;

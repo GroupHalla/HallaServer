@@ -158,7 +158,7 @@ private:
         int id; int parent; QString name, topic, desc, password;
         bool def, moderated; int ntalk; // talk power necessário (0 = usa moderated?25:0)
         int type, codec, quality, maxClients;
-        int bitrate = 48; // de 16kbps a 96kbps (padrão 48)
+        int bitrate = 96; // de 16kbps a 384kbps (padrão 96)
         QJsonObject groupPerms; // permissões de canais por cargo/grupo { "groupId": { "perm": bool } }
         QList<int> users;
         QList<QString> ops; // v3: UIDs dos operadores do canal (criador + promovidos)
