@@ -128,16 +128,18 @@ bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QSt
     if (!m_channels.contains(channelId)) return true;
     
     const SvrChan& ch = m_channels[channelId];
-    
-    // Se o grupo do usuário tem permissão específica configurada neste canal
-    QString gidStr = QString::number(c->groupId());
+
+    // Se o grupo do usuário tem uma regra específica configurada neste canal.
+    const QString gidStr = QString::number(c->groupId());
     if (ch.groupPerms.contains(gidStr)) {
-        QJsonObject gPerms = ch.groupPerms[gidStr].toObject();
-        if (gPerms.contains(permKey)) {
-            return gPerms[permKey].toBool();
-        }
+        const QJsonObject gPerms = ch.groupPerms[gidStr].toObject();
+        // "Percorrer" é a permissão de alcance do canal; sem ela não há
+        // entrada mesmo que "Entrar" esteja herdando a regra global.
+        if (permKey == QStringLiteral("join") && gPerms.contains("traverse")
+                && !gPerms.value("traverse").toBool()) return false;
+        if (gPerms.contains(permKey)) return gPerms.value(permKey).toBool();
     }
-    
+
     return true;
 }
 
@@ -1212,6 +1214,10 @@ void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
     const int id = obj["id"].toInt();
     const int target = obj["channel"].toInt();
     if (!m_clients.contains(id) || !m_channels.contains(target)) return;
+    if (!hasChannelPerm(c, target, QStringLiteral("move"))) {
+        sendError(c, "no_permission", "Sem permissão para mover clientes para este canal");
+        return;
+    }
     removeFromChannels(id);
     m_channels[target].users << id;
     QJsonObject m = HProto::msg("user_moved");
@@ -1369,6 +1375,15 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.id = m_nextChanId++;
     ch.parent = obj["parent"].toInt(0);
     if (ch.parent != 0 && !m_channels.contains(ch.parent)) ch.parent = 0;
+    if (ch.parent != 0 && !hasChannelPerm(c, ch.parent, QStringLiteral("channel_create"))) {
+        sendError(c, "no_permission", "Sem permissão para criar canais neste canal");
+        return;
+    }
+    if (ch.parent != 0 && type == 0
+            && !hasChannelPerm(c, ch.parent, QStringLiteral("chan_create_temp"))) {
+        sendError(c, "no_permission", "Sem permissão para criar canais temporários aqui");
+        return;
+    }
     ch.name = name;
     ch.topic = obj["topic"].toString().left(80);
     ch.desc = obj["desc"].toString();
@@ -1877,6 +1892,7 @@ void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray
         if (!whisper.isEmpty()) {
             if (!whisper.contains(c->id())) continue;        // sussurro: só os alvos
         } else if (channelOfUser(c->id()) != chan) continue; // normal: só o canal
+        if (!hasChannelPerm(c, chan, QStringLiteral("listen"))) continue;
         m_voice->sendTo(c->udpAddress(), c->udpPort(), packet);
     }
 }
