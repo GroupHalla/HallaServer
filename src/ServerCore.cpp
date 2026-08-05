@@ -202,7 +202,7 @@ void ServerCore::loadData() {
     setupBuiltinGroups();
 
     SvrChan def{1, 0, QStringLiteral("Canal padrão"), QString(), QString(), QString(),
-                true, false, 0, 2, 4, 6, -1, 96};
+                true, false, false, 0, 2, 4, 6, -1, 96};
     m_channels.insert(1, def);
     m_nextChanId = 2;
 
@@ -251,7 +251,7 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms FROM channels")) {
+        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol FROM channels")) {
             while (q.next()) {
                 SvrChan c;
                 c.id = q.value(0).toInt();
@@ -270,6 +270,7 @@ void ServerCore::loadData() {
                 c.bitrate = q.value(13).toInt();
                 if (c.bitrate <= 0) c.bitrate = 96;
                 c.groupPerms = QJsonDocument::fromJson(q.value(14).toString().toUtf8()).object();
+                c.noSymbol = q.value(15).toInt() != 0;
                 
                 if (c.id == 1) {
                     m_channels[1] = c;
@@ -458,8 +459,11 @@ bool ServerCore::initDatabase() {
            "`maxClients` INT, "
            "`ntalk` INT, "
            "`bitrate` INT, "
-           "`group_perms` TEXT"
+           "`group_perms` TEXT, "
+           "`no_symbol` INT DEFAULT 0"
            ")");
+    // Migração silenciosa de bancos criados antes da opção de ocultar símbolo.
+    q.exec("ALTER TABLE channels ADD COLUMN `no_symbol` INT DEFAULT 0");
            
     q.exec("CREATE TABLE IF NOT EXISTS groups ("
            "`id` INT PRIMARY KEY, "
@@ -572,6 +576,7 @@ void ServerCore::loadDataFromJson() {
             m_channels[1].type = 2; m_channels[1].codec = c.codec; m_channels[1].quality = c.quality;
             m_channels[1].maxClients = c.maxClients;
             m_channels[1].bitrate = c.bitrate;
+            m_channels[1].noSymbol = c.noSymbol;
             continue;
         }
         m_channels.insert(c.id, c);
@@ -692,8 +697,8 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
     }
 
-    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`) "
-              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms)");
+    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`) "
+              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol)");
     for (const SvrChan& c : m_channels) {
         if (c.type == 0) continue;
         q.bindValue(":id", c.id);
@@ -711,6 +716,7 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":ntalk", c.ntalk);
         q.bindValue(":bitrate", c.bitrate);
         q.bindValue(":group_perms", QString::fromUtf8(QJsonDocument(c.groupPerms).toJson(QJsonDocument::Compact)));
+        q.bindValue(":no_symbol", c.noSymbol ? 1 : 0);
         if (!q.exec()) {
             log("SQL SAVE ERROR on channels: " + q.lastError().text());
         }
@@ -1385,6 +1391,7 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     ch.name = name;
+    ch.noSymbol = obj["noSymbol"].toBool(false);
     ch.topic = obj["topic"].toString().left(80);
     ch.desc = obj["desc"].toString();
     ch.password = obj["pass"].toString();
@@ -1433,6 +1440,7 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     }
     SvrChan& ch = m_channels[id];
     if (obj.contains("name")) ch.name = obj["name"].toString().trimmed();
+    if (obj.contains("noSymbol")) ch.noSymbol = obj["noSymbol"].toBool();
     if (obj.contains("topic")) ch.topic = obj["topic"].toString().left(80);
     if (obj.contains("desc")) ch.desc = obj["desc"].toString();
     if (obj.contains("pass")) ch.password = obj["pass"].toString();
@@ -1804,6 +1812,7 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
     c.quality = o["quality"].toInt(6);
     c.maxClients = o["max"].toInt(-1);
     c.bitrate = qBound(16, o["bitrate"].toInt(96), 384);
+    c.noSymbol = o["noSymbol"].toBool(false);
     for (const QJsonValue& v : o["ops"].toArray()) c.ops << v.toString();
     return c;
 }
@@ -1814,6 +1823,7 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
                                      c.codec, c.quality, c.maxClients, c.users);
     j["ntalk"] = c.ntalk;
     j["bitrate"] = c.bitrate;
+    j["noSymbol"] = c.noSymbol;
     QJsonArray ops;
     for (const QString& u : c.ops) ops << u;
     j["ops"] = ops;
