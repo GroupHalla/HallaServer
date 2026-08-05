@@ -166,7 +166,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Halla Server ${{ github.ref_name }} — validação de movimentação
+          name: Halla Server ${{ github.ref_name }} — banner personalizado
           draft: false
           prerelease: false
           files: |
@@ -175,8 +175,8 @@ jobs:
           body: |
             ## Halla Server ${{ github.ref_name }}
 
-            ### Movimentação
-            * O servidor agora rejeita explicitamente tentativas de mover clientes para o canal `0` ou para destinos inexistentes.
-            * Clientes só podem permanecer associados a canais válidos.
+            ### Banner personalizado
+            * O administrador com `serverEdit` pode enviar um banner PNG, JPEG, GIF ou WebP de até 512 KiB.
+            * O arquivo é persistido no diretório de dados do servidor e sincronizado no login e em tempo real.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

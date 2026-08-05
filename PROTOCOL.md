@@ -45,7 +45,7 @@ codificados em UTF-8.
 | Mensagem | Campos | Descrição |
 |---|---|---|
 | `server_probe` | `server:{name,motd,ver,maxClients}`, `clients`, `maxClients` | Resposta à consulta pública de vagas |
-| `welcome` | `selfId`, `server:{name,motd,ver,platform,maxClients}`, `channels:[…]`, `users:[…]`, `voice:{udp,token}` | Estado completo após login |
+| `welcome` | `selfId`, `server:{name,motd,ver,platform,maxClients,banner?}`, `channels:[…]`, `users:[…]`, `voice:{udp,token}` | Estado completo após login |
 | `pong` | `ts` | Resposta ao ping |
 | `error` | `code`, `msg` | Erros (`bad_password`, `server_full`, `banned`, `name_in_use`, `no_permission`, `bad_channel_pass`…) e depois a conexão é encerrada quando fatal |
 | `chat` | `scope`, `from`, `text` | Chat retransmitido |
@@ -176,7 +176,7 @@ Regras especiais do servidor:
 | `group_set` | `id?`, `name?`, `perms?` | `groupEdit` | Cria (sem `id`) ou edita grupo |
 | `group_delete` | `id` | `groupEdit` | Exclui grupo custom (id>=100) |
 | `client_set_group` | `id?` ou `uid?`, `gid` | `groupEdit` | Atribui grupo (persistente por UID) |
-| `server_edit` | `name?`, `motd?` | `serverEdit` | Renomeia servidor / muda MOTD |
+| `server_edit` | `name?`, `motd?`, `banner?` (base64; vazio remove) | `serverEdit` | Renomeia servidor, muda MOTD ou o banner global |
 
 `privkey` agora aceita chaves com grupo alvo (no INI: `CHAVE@grupo`) e, por
 padrão, **cada chave só pode ser usada uma vez** (`privilegeKeyReuse = false`
@@ -191,7 +191,7 @@ no INI desativa). A chave registrada fica associada ao UID para sempre.
 | `ban_removed` | `uid` | Banimento removido |
 | `user_group` | `id`, `group`, `gid` | Agora inclui o id numérico do grupo |
 | `group_list` | `groups:[…]` | Broadcast quando grupos mudam |
-| `server_edit` | `name`, `motd` | Nome/MOTD mudaram em tempo real |
+| `server_edit` | `name`, `motd`, `banner?` | Nome, MOTD ou banner mudaram em tempo real |
 | `error` | `code` = `privkey_used`, `locked`, `no_talk_power`, `not_found`, `bad_uid` | Novos códigos |
 
 ## Poder de fala (talk power)

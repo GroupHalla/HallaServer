@@ -5,6 +5,7 @@
 #include <QMap>
 #include <QSet>
 #include <QJsonObject>
+#include <QByteArray>
 #include <QTimer>
 #include <QHostAddress>
 #include <QDateTime>
@@ -180,11 +181,15 @@ private:
 
     // ---- v3: avatares, offline, reclamações, arquivos
     QMap<QString, QString> m_avatarHash;            // uid -> hash ("" = sem avatar)
+    QByteArray m_serverBanner;                      // imagem do banner global (PNG/JPEG/WebP)
     QList<Complaint> m_complaints;
     QMap<QString, QList<OfflineMsg>> m_offline;     // uid destino -> mensagens
     QList<FileMeta> m_files;
 
     QString dataDir() const;                        // diretório do dataFile
+    QString serverBannerPath() const;
+    void loadServerBanner();
+    bool saveServerBanner();
     QString avatarPath(const QString& uid) const;
     QString iconPath(const QString& name) const;
     QString filesDir(int chan) const;

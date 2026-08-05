@@ -34,6 +34,7 @@ bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
     m_controlPort = controlPort;
     loadData();
     loadBans();
+    loadServerBanner();
     loadAvatars();
 
     m_tcp = new QTcpServer(this);
@@ -1168,6 +1169,8 @@ void ServerCore::sendWelcome(ClientSession* c) {
     server["platform"] = "Linux";
 #endif
     server["maxClients"] = m_maxClients;
+    if (!m_serverBanner.isEmpty())
+        server["banner"] = QString::fromLatin1(m_serverBanner.toBase64());
     w["server"] = server;
 
     QJsonArray users;
@@ -1910,10 +1913,42 @@ void ServerCore::handleServerEdit(ClientSession* c, const QJsonObject& obj) {
         }
     }
     if (obj.contains("motd")) m_motd = obj["motd"].toString().left(200);
+
+    bool bannerChanged = false;
+    if (obj.contains("banner")) {
+        const QString encoded = obj["banner"].toString();
+        const QByteArray decoded = QByteArray::fromBase64(encoded.toLatin1());
+        if (!encoded.isEmpty() && decoded.isEmpty()) {
+            sendError(c, "invalid_banner", "Imagem de banner inválida");
+            return;
+        }
+        if (decoded.size() > 512 * 1024) {
+            sendError(c, "banner_too_big", "O banner excede o limite de 512 KiB");
+            return;
+        }
+        const bool isPng = decoded.startsWith(QByteArray("\x89PNG\x0D\x0A\x1A\x0A", 8));
+        const bool isJpeg = decoded.startsWith(QByteArray("\xFF\xD8\xFF", 3));
+        const bool isGif = decoded.startsWith("GIF8");
+        const bool isWebp = decoded.size() >= 12 && decoded.left(4) == "RIFF"
+                         && decoded.mid(8, 4) == "WEBP";
+        if (!decoded.isEmpty() && !(isPng || isJpeg || isGif || isWebp)) {
+            sendError(c, "invalid_banner", "Use uma imagem PNG, JPEG, GIF ou WebP");
+            return;
+        }
+        m_serverBanner = decoded;
+        if (!saveServerBanner()) {
+            sendError(c, "io_error", "Não foi possível salvar o banner do servidor");
+            return;
+        }
+        bannerChanged = true;
+    }
+
     saveData();
     QJsonObject m = HProto::msg("server_edit");
     m["name"] = m_name;
     m["motd"] = m_motd;
+    if (bannerChanged)
+        m["banner"] = QString::fromLatin1(m_serverBanner.toBase64());
     broadcast(m);
 }
 
@@ -2019,6 +2054,36 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
 QString ServerCore::dataDir() const {
     if (m_dataFile.isEmpty()) return QDir::currentPath();
     return QFileInfo(m_dataFile).absolutePath();
+}
+
+QString ServerCore::serverBannerPath() const {
+    return dataDir() + QStringLiteral("/server-banner.bin");
+}
+
+void ServerCore::loadServerBanner() {
+    m_serverBanner.clear();
+    QFile f(serverBannerPath());
+    if (!f.exists()) return;
+    if (!f.open(QIODevice::ReadOnly)) {
+        log(QStringLiteral("Não foi possível abrir o banner do servidor"));
+        return;
+    }
+    const QByteArray bytes = f.read(512 * 1024 + 1);
+    if (bytes.size() > 512 * 1024) {
+        log(QStringLiteral("Banner do servidor ignorado: arquivo maior que 512 KiB"));
+        return;
+    }
+    m_serverBanner = bytes;
+}
+
+bool ServerCore::saveServerBanner() {
+    if (m_serverBanner.isEmpty()) {
+        return !QFile::remove(serverBannerPath()) || !QFile::exists(serverBannerPath());
+    }
+    QDir().mkpath(dataDir());
+    QFile f(serverBannerPath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    return f.write(m_serverBanner) == m_serverBanner.size();
 }
 
 QString ServerCore::avatarPath(const QString& uid) const {
