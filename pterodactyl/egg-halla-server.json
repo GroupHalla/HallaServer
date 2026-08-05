@@ -6,7 +6,7 @@
     },
     "exported_at": "2026-08-03T17:29:56+02:00",
     "name": "Halla Server",
-    "author": "grouphalla@gmail.com",
+    "author": "grouphallacontact@gmail.com",
     "description": "Servidor de comunica\u00e7\u00e3o de voz e chat nativo de alta fidelidade e lat\u00eancia ultrabaixa para o Halla. Possui atualiza\u00e7\u00e3o e download autom\u00e1tico 100% aut\u00f4nomo na inicializa\u00e7\u00e3o.",
     "features": [],
     "docker_images": {
