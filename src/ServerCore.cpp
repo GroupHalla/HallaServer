@@ -1232,7 +1232,10 @@ void ServerCore::handleChat(ClientSession* c, const QJsonObject& obj) {
 
 void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
     const int target = obj["channel"].toInt();
-    if (!m_channels.contains(target)) return;
+    if (target <= 0 || !m_channels.contains(target)) {
+        sendError(c, "invalid_channel", "Você só pode se mover para um canal existente");
+        return;
+    }
 
     if (!hasChannelPerm(c, target, "join")) {
         sendError(c, "no_permission", "Sem permissão para entrar neste canal");
@@ -1271,7 +1274,10 @@ void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
     }
     const int id = obj["id"].toInt();
     const int target = obj["channel"].toInt();
-    if (!m_clients.contains(id) || !m_channels.contains(target)) return;
+    if (target <= 0 || !m_clients.contains(id) || !m_channels.contains(target)) {
+        sendError(c, "invalid_channel", "O destino precisa ser um canal existente");
+        return;
+    }
     if (!hasChannelPerm(c, target, QStringLiteral("move"))) {
         sendError(c, "no_permission", "Sem permissão para mover clientes para este canal");
         return;
