@@ -14,6 +14,7 @@
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QRandomGenerator>
+#include <algorithm>
 
 ServerCore::ServerCore(QObject* parent) : QObject(parent) {
     m_nextToken = 1024;
@@ -251,7 +252,7 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol FROM channels")) {
+        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index FROM channels")) {
             while (q.next()) {
                 SvrChan c;
                 c.id = q.value(0).toInt();
@@ -271,6 +272,7 @@ void ServerCore::loadData() {
                 if (c.bitrate <= 0) c.bitrate = 96;
                 c.groupPerms = QJsonDocument::fromJson(q.value(14).toString().toUtf8()).object();
                 c.noSymbol = q.value(15).toInt() != 0;
+                c.order = q.value(16).toInt();
                 
                 if (c.id == 1) {
                     m_channels[1] = c;
@@ -460,10 +462,12 @@ bool ServerCore::initDatabase() {
            "`ntalk` INT, "
            "`bitrate` INT, "
            "`group_perms` TEXT, "
-           "`no_symbol` INT DEFAULT 0"
+           "`no_symbol` INT DEFAULT 0, "
+           "`order_index` INT DEFAULT 0"
            ")");
-    // Migração silenciosa de bancos criados antes da opção de ocultar símbolo.
+    // Migração silenciosa de bancos criados antes das opções visuais.
     q.exec("ALTER TABLE channels ADD COLUMN `no_symbol` INT DEFAULT 0");
+    q.exec("ALTER TABLE channels ADD COLUMN `order_index` INT DEFAULT 0");
            
     q.exec("CREATE TABLE IF NOT EXISTS groups ("
            "`id` INT PRIMARY KEY, "
@@ -697,8 +701,8 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
     }
 
-    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`) "
-              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol)");
+    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`) "
+              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol, :order_index)");
     for (const SvrChan& c : m_channels) {
         if (c.type == 0) continue;
         q.bindValue(":id", c.id);
@@ -717,6 +721,7 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":bitrate", c.bitrate);
         q.bindValue(":group_perms", QString::fromUtf8(QJsonDocument(c.groupPerms).toJson(QJsonDocument::Compact)));
         q.bindValue(":no_symbol", c.noSymbol ? 1 : 0);
+        q.bindValue(":order_index", c.order);
         if (!q.exec()) {
             log("SQL SAVE ERROR on channels: " + q.lastError().text());
         }
@@ -948,6 +953,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "poke")        handlePoke(c, obj);
     else if (t == "chan_create") handleChanCreate(c, obj);
     else if (t == "chan_edit")   handleChanEdit(c, obj);
+    else if (t == "chan_move")   handleChanMove(c, obj);
     else if (t == "chan_delete") handleChanDelete(c, obj);
     else if (t == "kick")        handleKick(c, obj);
     else if (t == "ban")         handleBan(c, obj);
@@ -1392,6 +1398,12 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     }
     ch.name = name;
     ch.noSymbol = obj["noSymbol"].toBool(false);
+    if (obj.contains("order")) {
+        ch.order = qMax(0, obj["order"].toInt());
+    } else {
+        for (const SvrChan& sibling : m_channels)
+            if (sibling.parent == ch.parent) ch.order = qMax(ch.order, sibling.order + 10);
+    }
     ch.topic = obj["topic"].toString().left(80);
     ch.desc = obj["desc"].toString();
     ch.password = obj["pass"].toString();
@@ -1411,6 +1423,45 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     QJsonObject m = HProto::msg("chan_update");
     m["chan"] = chanToJson(ch);
     broadcast(m);
+}
+
+void ServerCore::handleChanMove(ClientSession* c, const QJsonObject& obj) {
+    const int id = obj["id"].toInt();
+    const int parent = obj["parent"].toInt(0);
+    if (!m_channels.contains(id) || id == 1) return;
+    if (parent != 0 && !m_channels.contains(parent)) return;
+    if (!hasPerm(c, "chanEdit") && !isChanOp(c, id)) {
+        sendError(c, "no_permission", "Sem permissão para reordenar canais");
+        return;
+    }
+    // Impede colocar um canal dentro de si mesmo ou de um descendente.
+    for (int p = parent; p != 0 && m_channels.contains(p); p = m_channels[p].parent) {
+        if (p == id) {
+            sendError(c, "invalid_parent", "Um canal não pode ser colocado dentro de sua própria árvore");
+            return;
+        }
+    }
+
+    QList<int> siblings;
+    for (const SvrChan& sibling : m_channels)
+        if (sibling.parent == parent && sibling.id != id) siblings << sibling.id;
+    std::sort(siblings.begin(), siblings.end(), [&](int a, int b) {
+        if (m_channels[a].order != m_channels[b].order)
+            return m_channels[a].order < m_channels[b].order;
+        return m_channels[a].name.localeAwareCompare(m_channels[b].name) < 0;
+    });
+    const int position = qBound(0, obj["order"].toInt(siblings.size()), siblings.size());
+    siblings.insert(position, id);
+    for (int i = 0; i < siblings.size(); ++i) {
+        m_channels[siblings[i]].parent = parent;
+        m_channels[siblings[i]].order = i * 10;
+    }
+    saveData();
+    for (int siblingId : siblings) {
+        QJsonObject m = HProto::msg("chan_update");
+        m["chan"] = chanToJson(m_channels[siblingId]);
+        broadcast(m);
+    }
 }
 
 void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
@@ -1813,6 +1864,7 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
     c.maxClients = o["max"].toInt(-1);
     c.bitrate = qBound(16, o["bitrate"].toInt(96), 384);
     c.noSymbol = o["noSymbol"].toBool(false);
+    c.order = o["order"].toInt(0);
     for (const QJsonValue& v : o["ops"].toArray()) c.ops << v.toString();
     return c;
 }
@@ -1824,6 +1876,7 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
     j["ntalk"] = c.ntalk;
     j["bitrate"] = c.bitrate;
     j["noSymbol"] = c.noSymbol;
+    j["order"] = c.order;
     QJsonArray ops;
     for (const QString& u : c.ops) ops << u;
     j["ops"] = ops;
