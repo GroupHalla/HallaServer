@@ -32,10 +32,28 @@ void VoiceRelay::onReadyRead() {
         memcpy(&seq,   data.constData() + 8, 2);
 
         ClientSession* sender = m_core->clientByVoiceToken(token);
-        if (!sender) continue;
+        if (!sender) {
+            m_core->log(QStringLiteral("UDP: token de voz desconhecido %1 vindo de %2:%3")
+                            .arg(token)
+                            .arg(dg.senderAddress().toString())
+                            .arg(dg.senderPort()));
+            continue;
+        }
 
-        // aprende/atualiza o endpoint UDP do remetente (funciona atrás de NAT)
+        // Aprende/atualiza o endpoint UDP do remetente antes de validar o
+        // payload. Assim até um registro vazio mantém o caminho de retorno
+        // aberto atrás de NAT/firewall.
+        const bool endpointChanged = sender->udpPort() != dg.senderPort()
+                                  || sender->udpAddress() != dg.senderAddress();
         sender->setUdpEndpoint(dg.senderAddress(), dg.senderPort());
+        if (endpointChanged) {
+            m_core->log(QStringLiteral("UDP: endpoint registrado para #%1 (%2), token %3 -> %4:%5")
+                            .arg(sender->id())
+                            .arg(sender->name())
+                            .arg(token)
+                            .arg(dg.senderAddress().toString())
+                            .arg(dg.senderPort()));
+        }
 
         const QByteArray payload = data.mid(10);
         if (payload.isEmpty()) continue;

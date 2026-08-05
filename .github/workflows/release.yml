@@ -162,22 +162,26 @@ jobs:
           name: halla-server-linux
 
       - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Halla Server ${{ github.ref_name }} — Sincronia de Árvores de Canais e Voz
+          name: Halla Server ${{ github.ref_name }} — canais vinculados e consulta de vagas
           draft: false
           prerelease: false
           files: |
             halla-server-${{ github.ref_name }}-win64.zip
             halla-server-${{ github.ref_name }}-linux-x64.tar.gz
           body: |
-            ## 🚀 Novidades e Melhorias do Halla Server ${{ github.ref_name }}
+            ## Halla Server ${{ github.ref_name }}
 
-            Esta release corrige em definitivo o problema de sincronização gráfica de usuários na árvore de canais.
+            ### Canais vinculados
+            * Nova mensagem `chan_link` para vincular ou desvincular dois ou mais canais.
+            * Vínculos simétricos são persistidos em SQLite e enviados no `welcome`/`chan_update`.
+            * O relay UDP encaminha voz pelo componente inteiro de canais vinculados, inclusive para usuários Mobile e Desktop em canais diferentes.
 
-            ### 📁 Sincronização de Canais e Movimentação Inicial
-            * **Correção de Visibilidade:** O servidor agora envia um sinalizador `"user_moved"` explícito para o canal padrão assim que o login é confirmado. Isso faz com que todos os outros clientes (como o do PC e o do Celular) enxerguem o novo usuário conectado instantaneamente no Canal 1!
-            * **Suporte Modular Completo:** Totalmente portátil sob painéis Pterodactyl Debian Yolks.
+            ### Consulta de servidor
+            * Nova consulta `server_probe`, sem criar uma sessão nem consumir vaga, informando clientes online e `maxClients` para o menu inicial do Mobile.
+            * Registros de endpoint UDP agora deixam logs explícitos de token, endereço e porta para diagnosticar NAT antes da primeira fala.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

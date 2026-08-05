@@ -19,6 +19,7 @@ codificados em UTF-8.
 
 | Mensagem | Campos | Descrição |
 |---|---|---|
+| `server_probe` | — | Consulta pública de nome, clientes online e limite de vagas; não cria sessão |
 | `hello` | `proto`, `uid`, `nick`, `pass?`, `adminPass?`, `ver`, `platform` | Login. `proto` = 1 ou 2 |
 | `ping` | `ts` | Medição de latência (resposta `pong` com mesmo `ts`) |
 | `chat` | `scope` (`server`/`channel`/`private`), `to?`, `text` | Envia mensagem de chat |
@@ -32,6 +33,7 @@ codificados em UTF-8.
 | `volume` | `to`, `db` (−40..12) | Volume local de outro cliente (não é retransmitido pela voz; cada cliente aplica localmente ao decodificar) — informativo ao servidor |
 | `chan_create` | `name`, `parent`, `topic?`, `desc?`, `pass?`, `type` (0 temporário/1 semi/2 permanente), `codec`, `quality`, `max`, `moderated?` | Criar canal |
 | `chan_edit` | `id`, +campos de `chan_create` | Editar canal |
+| `chan_link` | `ids` (array com 2+ canais), `link` (bool) | Vincular ou desvincular o áudio dos canais selecionados |
 | `chan_delete` | `id` | Excluir canal |
 | `kick` | `id`, `reason?`, `from` (`channel`/`server`) | Expulsar (requer permissão) |
 | `ban` | `id`, `reason?`, `minutes` (0 = permanente) | Banir (requer admin) |
@@ -42,6 +44,7 @@ codificados em UTF-8.
 
 | Mensagem | Campos | Descrição |
 |---|---|---|
+| `server_probe` | `server:{name,motd,ver,maxClients}`, `clients`, `maxClients` | Resposta à consulta pública de vagas |
 | `welcome` | `selfId`, `server:{name,motd,ver,platform,maxClients}`, `channels:[…]`, `users:[…]`, `voice:{udp,token}` | Estado completo após login |
 | `pong` | `ts` | Resposta ao ping |
 | `error` | `code`, `msg` | Erros (`bad_password`, `server_full`, `banned`, `name_in_use`, `no_permission`, `bad_channel_pass`…) e depois a conexão é encerrada quando fatal |
@@ -71,7 +74,7 @@ codificados em UTF-8.
 ```json
 {"id":1,"parent":0,"name":"Canal padrão","topic":"","desc":"","pw":false,
  "def":true,"type":2,"moderated":false,"codec":4,"quality":6,"max":-1,
- "users":[5,7]}
+ "order":0,"linked":[2],"users":[5,7]}
 ```
 
 ## Voz (UDP)
@@ -86,7 +89,9 @@ codificados em UTF-8.
 | N | frame Opus (20 ms, 48 kHz, mono) |
 
 O servidor aprende o endereço UDP do cliente pelo primeiro pacote recebido
-(amigável a NAT) e retransmite os frames para os membros do mesmo canal.
+(amigável a NAT) e retransmite os frames para os membros do mesmo canal e para
+os canais que estejam no mesmo grupo de vínculos. Registros UDP periódicos
+mantêm o endpoint conhecido mesmo antes da primeira fala.
 
 ### Pacote servidor → cliente
 

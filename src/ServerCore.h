@@ -161,6 +161,7 @@ private:
         int bitrate = 96; // de 16kbps a 384kbps (padrão 96)
         int order = 0;    // posição relativa entre canais irmãos
         QJsonObject groupPerms; // permissões de canais por cargo/grupo { "groupId": { "perm": bool } }
+        QList<int> linkedChannels; // relação simétrica de áudio entre canais
         QList<int> users;
         QList<QString> ops; // v3: UIDs dos operadores do canal (criador + promovidos)
     };
@@ -214,6 +215,7 @@ private:
     void handleChanCreate(ClientSession* c, const QJsonObject& obj);
     void handleChanEdit(ClientSession* c, const QJsonObject& obj);
     void handleChanMove(ClientSession* c, const QJsonObject& obj);
+    void handleChanLink(ClientSession* c, const QJsonObject& obj);
     void handleChanDelete(ClientSession* c, const QJsonObject& obj);
     void handleKick(ClientSession* c, const QJsonObject& obj);
     void handleBan(ClientSession* c, const QJsonObject& obj);

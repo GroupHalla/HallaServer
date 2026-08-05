@@ -252,7 +252,7 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index FROM channels")) {
+        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index, linked_channels FROM channels")) {
             while (q.next()) {
                 SvrChan c;
                 c.id = q.value(0).toInt();
@@ -273,6 +273,12 @@ void ServerCore::loadData() {
                 c.groupPerms = QJsonDocument::fromJson(q.value(14).toString().toUtf8()).object();
                 c.noSymbol = q.value(15).toInt() != 0;
                 c.order = q.value(16).toInt();
+                const QJsonDocument linkedDoc = QJsonDocument::fromJson(q.value(17).toString().toUtf8());
+                for (const QJsonValue& value : linkedDoc.array()) {
+                    const int linkedId = value.toInt();
+                    if (linkedId > 0 && linkedId != c.id && !c.linkedChannels.contains(linkedId))
+                        c.linkedChannels << linkedId;
+                }
                 
                 if (c.id == 1) {
                     m_channels[1] = c;
@@ -463,11 +469,15 @@ bool ServerCore::initDatabase() {
            "`bitrate` INT, "
            "`group_perms` TEXT, "
            "`no_symbol` INT DEFAULT 0, "
-           "`order_index` INT DEFAULT 0"
+           "`order_index` INT DEFAULT 0, "
+           "`linked_channels` TEXT"
            ")");
-    // Migração silenciosa de bancos criados antes das opções visuais.
+    // Migração silenciosa de bancos criados antes das opções visuais e de
+    // áudio vinculado. O erro de coluna já existente é intencionalmente
+    // ignorado para manter bancos atuais compatíveis.
     q.exec("ALTER TABLE channels ADD COLUMN `no_symbol` INT DEFAULT 0");
     q.exec("ALTER TABLE channels ADD COLUMN `order_index` INT DEFAULT 0");
+    q.exec("ALTER TABLE channels ADD COLUMN `linked_channels` TEXT");
            
     q.exec("CREATE TABLE IF NOT EXISTS groups ("
            "`id` INT PRIMARY KEY, "
@@ -581,6 +591,7 @@ void ServerCore::loadDataFromJson() {
             m_channels[1].maxClients = c.maxClients;
             m_channels[1].bitrate = c.bitrate;
             m_channels[1].noSymbol = c.noSymbol;
+            m_channels[1].linkedChannels = c.linkedChannels;
             continue;
         }
         m_channels.insert(c.id, c);
@@ -701,8 +712,8 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
     }
 
-    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`) "
-              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol, :order_index)");
+    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`) "
+              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol, :order_index, :linked_channels)");
     for (const SvrChan& c : m_channels) {
         if (c.type == 0) continue;
         q.bindValue(":id", c.id);
@@ -722,6 +733,10 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":group_perms", QString::fromUtf8(QJsonDocument(c.groupPerms).toJson(QJsonDocument::Compact)));
         q.bindValue(":no_symbol", c.noSymbol ? 1 : 0);
         q.bindValue(":order_index", c.order);
+        QJsonArray linked;
+        for (int linkedId : c.linkedChannels) linked << linkedId;
+        q.bindValue(":linked_channels",
+                    QString::fromUtf8(QJsonDocument(linked).toJson(QJsonDocument::Compact)));
         if (!q.exec()) {
             log("SQL SAVE ERROR on channels: " + q.lastError().text());
         }
@@ -907,12 +922,24 @@ void ServerCore::checkIdleClients() {
     QList<int> toRemove;
     for (const SvrChan& c : m_channels)
         if (c.type == 0 && c.users.isEmpty()) toRemove << c.id;
+    QList<int> linkAffected;
     for (int id : toRemove) {
         m_channels.remove(id);
+        for (SvrChan& other : m_channels) {
+            if (other.linkedChannels.removeAll(id) > 0 && !linkAffected.contains(other.id))
+                linkAffected << other.id;
+        }
         QJsonObject m = HProto::msg("chan_removed");
         m["id"] = id;
         broadcast(m);
     }
+    for (int affectedId : linkAffected) {
+        if (!m_channels.contains(affectedId)) continue;
+        QJsonObject update = HProto::msg("chan_update");
+        update["chan"] = chanToJson(m_channels[affectedId]);
+        broadcast(update);
+    }
+    if (!toRemove.isEmpty()) saveData();
 }
 
 void ServerCore::registerClient(ClientSession* c) {
@@ -927,6 +954,24 @@ void ServerCore::registerClient(ClientSession* c) {
 // ==================================================================== mensagens
 void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     const QString t = obj["t"].toString();
+
+    // Consulta leve usada pela tela inicial do Mobile. Não cria uma sessão,
+    // não consome vaga e permite mostrar o limite configurado no servidor
+    // antes de o usuário tocar no cartão para entrar.
+    if (c->id() == 0 && t == "server_probe") {
+        QJsonObject response = HProto::msg("server_probe");
+        QJsonObject server;
+        server["name"] = m_name;
+        server["motd"] = m_motd;
+        server["ver"] = m_version;
+        server["maxClients"] = m_maxClients;
+        response["server"] = server;
+        response["clients"] = m_clients.size();
+        response["maxClients"] = m_maxClients;
+        c->send(response);
+        c->closeAndDelete();
+        return;
+    }
 
     if (c->id() == 0 && t != "hello") return; // exige login antes de tudo
 
@@ -954,6 +999,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "chan_create") handleChanCreate(c, obj);
     else if (t == "chan_edit")   handleChanEdit(c, obj);
     else if (t == "chan_move")   handleChanMove(c, obj);
+    else if (t == "chan_link")   handleChanLink(c, obj);
     else if (t == "chan_delete") handleChanDelete(c, obj);
     else if (t == "kick")        handleKick(c, obj);
     else if (t == "ban")         handleBan(c, obj);
@@ -1464,6 +1510,69 @@ void ServerCore::handleChanMove(ClientSession* c, const QJsonObject& obj) {
     }
 }
 
+void ServerCore::handleChanLink(ClientSession* c, const QJsonObject& obj) {
+    QList<int> ids;
+    QSet<int> seen;
+    for (const QJsonValue& value : obj["ids"].toArray()) {
+        const int id = value.toInt();
+        if (id > 0 && !seen.contains(id)) {
+            seen.insert(id);
+            ids << id;
+        }
+    }
+    if (ids.size() < 2) {
+        sendError(c, "invalid_channels", "Selecione pelo menos dois canais para vincular");
+        return;
+    }
+    for (int id : ids) {
+        if (!m_channels.contains(id)) {
+            sendError(c, "invalid_channel", "Um dos canais selecionados não existe mais");
+            return;
+        }
+    }
+
+    // Vincular canais altera a rota de áudio de cada canal. A permissão
+    // existente de edição de canal é usada; operadores só podem fazer isso
+    // quando controlam todos os canais selecionados (e não o canal padrão).
+    bool operatorOfAll = true;
+    for (int id : ids) {
+        if (id == 1 || !isChanOp(c, id)) {
+            operatorOfAll = false;
+            break;
+        }
+    }
+    if (!hasPerm(c, "chanEdit") && !operatorOfAll) {
+        sendError(c, "no_permission", "Sem permissão para vincular canais");
+        return;
+    }
+
+    const bool link = obj.contains("link") ? obj["link"].toBool() : true;
+    for (int i = 0; i < ids.size(); ++i) {
+        for (int j = i + 1; j < ids.size(); ++j) {
+            SvrChan& a = m_channels[ids[i]];
+            SvrChan& b = m_channels[ids[j]];
+            if (link) {
+                if (!a.linkedChannels.contains(b.id)) a.linkedChannels << b.id;
+                if (!b.linkedChannels.contains(a.id)) b.linkedChannels << a.id;
+            } else {
+                a.linkedChannels.removeAll(b.id);
+                b.linkedChannels.removeAll(a.id);
+            }
+        }
+    }
+
+    saveData();
+    for (int id : ids) {
+        QJsonObject update = HProto::msg("chan_update");
+        update["chan"] = chanToJson(m_channels[id]);
+        broadcast(update);
+    }
+    log(QStringLiteral("Canais %1 %2 foram %3")
+            .arg(ids.size())
+            .arg(link ? QStringLiteral("vinculados") : QStringLiteral("desvinculados"))
+            .arg(c->name()));
+}
+
 void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     const int id = obj["id"].toInt();
     if (!m_channels.contains(id)) return;
@@ -1532,11 +1641,20 @@ void ServerCore::handleChanDelete(ClientSession* c, const QJsonObject& obj) {
         broadcast(m);
     }
     m_channels.remove(id);
+    QList<int> linkAffected;
+    for (SvrChan& other : m_channels) {
+        if (other.linkedChannels.removeAll(id) > 0) linkAffected << other.id;
+    }
     removeChannelFiles(id); // v3: apaga arquivos do canal
     saveData();
     QJsonObject m = HProto::msg("chan_removed");
     m["id"] = id;
     broadcast(m);
+    for (int affectedId : linkAffected) {
+        QJsonObject update = HProto::msg("chan_update");
+        update["chan"] = chanToJson(m_channels[affectedId]);
+        broadcast(update);
+    }
 }
 
 void ServerCore::handleKick(ClientSession* c, const QJsonObject& obj) {
@@ -1865,6 +1983,11 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
     c.bitrate = qBound(16, o["bitrate"].toInt(96), 384);
     c.noSymbol = o["noSymbol"].toBool(false);
     c.order = o["order"].toInt(0);
+    for (const QJsonValue& v : o["linked"].toArray()) {
+        const int linkedId = v.toInt();
+        if (linkedId > 0 && linkedId != c.id && !c.linkedChannels.contains(linkedId))
+            c.linkedChannels << linkedId;
+    }
     for (const QJsonValue& v : o["ops"].toArray()) c.ops << v.toString();
     return c;
 }
@@ -1877,6 +2000,9 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
     j["bitrate"] = c.bitrate;
     j["noSymbol"] = c.noSymbol;
     j["order"] = c.order;
+    QJsonArray linked;
+    for (int linkedId : c.linkedChannels) linked << linkedId;
+    j["linked"] = linked;
     QJsonArray ops;
     for (const QString& u : c.ops) ops << u;
     j["ops"] = ops;
@@ -1941,21 +2067,51 @@ void ServerCore::loadAvatars() {
 }
 
 void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload) {
-    if (!sender || !m_voice) return;
+    if (!sender || !m_voice || payload.isEmpty()) return;
     const int chan = channelOfUser(sender->id());
-    if (chan == 0) return;
-    // Cenário 3: talk power — pacotes de voz de quem não pode falar são descartados
+    if (chan == 0 || !m_channels.contains(chan)) return;
+
+    // A permissão de fala continua sendo avaliada no canal em que o remetente
+    // está. O vínculo somente amplia os canais que escutam esse áudio.
     if (!canTalkIn(sender, chan)) return;
+
+    // Monta o componente conectado do canal de origem. Isso permite que uma
+    // seleção A+B+C continue funcionando mesmo que os vínculos tenham sido
+    // criados em operações diferentes (A-B e depois B-C).
+    QSet<int> linked;
+    QList<int> pending;
+    linked.insert(chan);
+    pending << chan;
+    while (!pending.isEmpty()) {
+        const int current = pending.takeFirst();
+        if (!m_channels.contains(current)) continue;
+        for (int next : m_channels[current].linkedChannels) {
+            if (m_channels.contains(next) && !linked.contains(next)) {
+                linked.insert(next);
+                pending << next;
+            }
+        }
+        // Aceita também bancos antigos eventualmente assimétricos e corrige a
+        // entrega sem exigir que o administrador refaça os vínculos.
+        for (const SvrChan& candidate : m_channels) {
+            if (candidate.linkedChannels.contains(current) && !linked.contains(candidate.id)) {
+                linked.insert(candidate.id);
+                pending << candidate.id;
+            }
+        }
+    }
 
     const QSet<int> whisper = sender->whisperIds();   // v3: sussurro para alvos específicos
     const QByteArray packet = HProto::encodeVoiceServer(quint32(sender->id()), seq, payload);
     for (ClientSession* c : m_clients) {
         if (c == sender) continue;
-        if (c->udpPort() == 0) continue;                     // ainda não falou nada
+        if (c->udpPort() == 0) continue;
+        const int targetChan = channelOfUser(c->id());
+        if (targetChan == 0) continue;
         if (!whisper.isEmpty()) {
             if (!whisper.contains(c->id())) continue;        // sussurro: só os alvos
-        } else if (channelOfUser(c->id()) != chan) continue; // normal: só o canal
-        if (!hasChannelPerm(c, chan, QStringLiteral("listen"))) continue;
+        } else if (!linked.contains(targetChan)) continue;   // canal ou vínculo
+        if (!hasChannelPerm(c, targetChan, QStringLiteral("listen"))) continue;
         m_voice->sendTo(c->udpAddress(), c->udpPort(), packet);
     }
 }
