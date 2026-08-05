@@ -166,7 +166,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Halla Server ${{ github.ref_name }} — banner personalizado
+          name: Halla Server ${{ github.ref_name }} — grupos e registro
           draft: false
           prerelease: false
           files: |
@@ -175,8 +175,9 @@ jobs:
           body: |
             ## Halla Server ${{ github.ref_name }}
 
-            ### Banner personalizado
-            * O administrador com `serverEdit` pode enviar um banner PNG, JPEG, GIF ou WebP de até 512 KiB.
-            * O arquivo é persistido no diretório de dados do servidor e sincronizado no login e em tempo real.
+            ### Grupos e registro
+            * Adicionado registro de usuários por UID, com auto-registro controlado pela permissão `selfRegister`.
+            * Administradores ou grupos com `registerUsers` podem registrar outros usuários conectados.
+            * A lista de grupos agora informa os usuários associados, o estado online e o registro persistente.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

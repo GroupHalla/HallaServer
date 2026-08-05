@@ -107,6 +107,7 @@ private:
     bool m_recording = false;
     bool m_commander = false;
     bool m_talking = false;
+    bool m_registered = false;
     QHostAddress m_udpAddr;
     quint16 m_udpPort = 0;
     quint32 m_voiceToken = 0;

@@ -57,6 +57,7 @@ struct RegClient {
     QString name;
     QDateTime firstSeen;
     QDateTime lastSeen;
+    bool registered = false;
 };
 
 // Núcleo do servidor Halla: sessões, canais, permissões, chat, moderação.
@@ -232,6 +233,7 @@ private:
     void handleGroupSet(ClientSession* c, const QJsonObject& obj);
     void handleGroupDelete(ClientSession* c, const QJsonObject& obj);
     void handleClientSetGroup(ClientSession* c, const QJsonObject& obj);
+    void handleRegister(ClientSession* c, const QJsonObject& obj);
     void handleServerEdit(ClientSession* c, const QJsonObject& obj);
     void handleTalking(ClientSession* c, const QJsonObject& obj);
     // ---- v3
