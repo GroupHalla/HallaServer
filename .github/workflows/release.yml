@@ -175,9 +175,8 @@ jobs:
           body: |
             ## Halla Server ${{ github.ref_name }}
 
-            ### Grupos e registro
-            * Adicionado registro de usuários por UID, com auto-registro controlado pela permissão `selfRegister`.
-            * Administradores ou grupos com `registerUsers` podem registrar outros usuários conectados.
-            * A lista de grupos agora informa os usuários associados, o estado online e o registro persistente.
+            ### Correção de compatibilidade
+            * Release de manutenção para acompanhar os clientes Desktop e Mobile atualizados.
+            * Mantidos o registro de usuários e a lista persistente de membros dos grupos.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
