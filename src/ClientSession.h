@@ -36,7 +36,6 @@ public:
     bool recording() const { return m_recording; }
     bool commander() const { return m_commander; }
     bool talking() const { return m_talking; }
-    bool registered() const { return m_registered; }
 
     QHostAddress udpAddress() const { return m_udpAddr; }
     quint16 udpPort() const { return m_udpPort; }
@@ -63,7 +62,6 @@ public:
     void setRecording(bool v)               { m_recording = v; }
     void setCommander(bool v)               { m_commander = v; }
     void setTalking(bool v)                 { m_talking = v; }
-    void setRegistered(bool v)              { m_registered = v; }
     void setUdpEndpoint(const QHostAddress& addr, quint16 port) {
         m_udpAddr = addr; m_udpPort = port;
     }
@@ -109,7 +107,6 @@ private:
     bool m_recording = false;
     bool m_commander = false;
     bool m_talking = false;
-    bool m_registered = false;
     QHostAddress m_udpAddr;
     quint16 m_udpPort = 0;
     quint32 m_voiceToken = 0;

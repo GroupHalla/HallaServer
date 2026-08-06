@@ -294,24 +294,6 @@ servidor responde `no_talk_power` e descarta os pacotes até que o usuário se
 calle (`talking=off`).
 
 
-## Registro de identidades e membros de grupos
-
-Um UID que nunca apareceu no servidor entra no grupo `guest` com
-`registered:false`. A permissão `selfRegister` controla o auto-registro;
-`registerUsers` permite que um moderador registre outro cliente conectado.
-Após o registro, o cliente passa ao grupo `normal` caso não tenha uma
-atribuição persistente.
-
-```json
-{ "t":"register" }
-{ "t":"register", "id":7 }
-```
-
-O servidor responde `registration` e transmite `user_registered`. O objeto de
-usuário inclui `registered:true|false`. `group_list` inclui também
-`members:[{uid,name,id,online,registered}]` em cada grupo para que os clientes
-possam exibir e administrar os membros.
-
 ---
 
 # ServerQuery (v3.1) — administração em texto

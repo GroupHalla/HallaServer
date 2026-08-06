@@ -175,8 +175,8 @@ jobs:
           body: |
             ## Halla Server ${{ github.ref_name }}
 
-            ### Correção de compatibilidade
-            * Release de manutenção para acompanhar os clientes Desktop e Mobile atualizados.
-            * Mantidos o registro de usuários e a lista persistente de membros dos grupos.
+            ### Remoção do registro
+            * Removido o sistema de registro separado; o UID continua sendo a identidade persistente do cliente.
+            * Mantidos os grupos, cargos e atribuições persistentes por UID.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

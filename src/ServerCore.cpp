@@ -72,11 +72,11 @@ void ServerCore::sendError(ClientSession* c, const QString& code, const QString&
 void ServerCore::setupBuiltinGroups() {
     GroupDef guest;  guest.id = 1;  guest.name = "guest";
     guest.perms = QJsonObject{
-        {"poke", true}, {"privmsg", true}, {"selfRegister", true}, {"talkPower", 10}
+        {"poke", true}, {"privmsg", true}, {"talkPower", 10}
     };
     GroupDef normal; normal.id = 2; normal.name = "normal";
     normal.perms = QJsonObject{
-        {"poke", true}, {"privmsg", true}, {"selfRegister", true}, {"chanCreateTemp", true},
+        {"poke", true}, {"privmsg", true}, {"chanCreateTemp", true},
         {"talkPower", 25}
     };
     GroupDef admin;  admin.id = 3;  admin.name = "admin";
@@ -87,7 +87,7 @@ void ServerCore::setupBuiltinGroups() {
         {"b_client_is_channel_commander", true},
         {"chanCreateTemp", true}, {"chanCreateSemi", true},
         {"chanCreatePerm", true}, {"chanEdit", true}, {"chanDelete", true},
-        {"serverEdit", true}, {"groupEdit", true}, {"registerUsers", true}, {"selfRegister", true}, {"poke", true},
+        {"serverEdit", true}, {"groupEdit", true}, {"poke", true},
         {"privmsg", true}, {"ignoreChanPass", true}, {"ignoreTalkPower", true},
         {"talkPower", 75}
     };
@@ -328,13 +328,12 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT uid, name, firstSeen, lastSeen, registered FROM clients")) {
+        if (q.exec("SELECT uid, name, firstSeen, lastSeen FROM clients")) {
             while (q.next()) {
                 RegClient rc;
                 rc.name = q.value(1).toString();
                 rc.firstSeen = QDateTime::fromString(q.value(2).toString(), Qt::ISODate);
                 rc.lastSeen = QDateTime::fromString(q.value(3).toString(), Qt::ISODate);
-                rc.registered = q.value(4).toInt() != 0;
                 m_registry[q.value(0).toString()] = rc;
             }
         }
@@ -503,12 +502,8 @@ bool ServerCore::initDatabase() {
            "`uid` VARCHAR(255) PRIMARY KEY, "
            "`name` VARCHAR(255), "
            "`firstSeen` VARCHAR(255), "
-           "`lastSeen` VARCHAR(255), "
-           "`registered` INT DEFAULT 1"
+           "`lastSeen` VARCHAR(255)"
            ")");
-    // Registros já existentes eram clientes conhecidos antes da função de
-    // cadastro; a migração os considera registrados para não rebaixá-los.
-    q.exec("ALTER TABLE clients ADD COLUMN `registered` INT DEFAULT 1");
            
     q.exec("CREATE TABLE IF NOT EXISTS bans ("
            "`uid` VARCHAR(255), "
@@ -636,7 +631,6 @@ void ServerCore::loadDataFromJson() {
         rc.name = o["name"].toString();
         rc.firstSeen = QDateTime::fromString(o["first"].toString(), Qt::ISODate);
         rc.lastSeen = QDateTime::fromString(o["last"].toString(), Qt::ISODate);
-        rc.registered = o.contains("registered") ? o["registered"].toBool() : true;
         m_registry[it.key()] = rc;
     }
     m_queryPass = root["queryPass"].toString();
@@ -781,13 +775,12 @@ void ServerCore::saveDataToSql() {
         }
     }
 
-    q.prepare("INSERT INTO clients (`uid`, `name`, `firstSeen`, `lastSeen`, `registered`) VALUES (:uid, :name, :first, :last, :registered)");
+    q.prepare("INSERT INTO clients (`uid`, `name`, `firstSeen`, `lastSeen`) VALUES (:uid, :name, :first, :last)");
     for (auto it = m_registry.begin(); it != m_registry.end(); ++it) {
         q.bindValue(":uid", it.key());
         q.bindValue(":name", it.value().name);
         q.bindValue(":first", it.value().firstSeen.toString(Qt::ISODate));
         q.bindValue(":last", it.value().lastSeen.toString(Qt::ISODate));
-        q.bindValue(":registered", it.value().registered ? 1 : 0);
         if (!q.exec()) {
             log("SQL SAVE ERROR on clients: " + q.lastError().text());
         }
@@ -1019,7 +1012,6 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "group_set")   handleGroupSet(c, obj);
     else if (t == "group_delete") handleGroupDelete(c, obj);
     else if (t == "client_set_group") handleClientSetGroup(c, obj);
-    else if (t == "register")     handleRegister(c, obj);
     else if (t == "server_edit") handleServerEdit(c, obj);
     else if (t == "avatar_set")     handleAvatarSet(c, obj);
     else if (t == "avatar_get")     handleAvatarGet(c, obj);
@@ -1117,30 +1109,15 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     c->setVersion(obj["ver"].toString().left(20));
     c->setPlatform(obj["platform"].toString().left(20));
 
-    // Um UID nunca visto entra como visitante não registrado. Clientes já
-    // registrados mantêm sua atribuição persistente; a senha administrativa
-    // continua elevando a sessão para admin.
-    RegClient& registryEntry = m_registry[uid];
-    if (!registryEntry.firstSeen.isValid()) registryEntry.firstSeen = QDateTime::currentDateTime();
-    registryEntry.name = nick;
-    const bool adminLogin = !adminPass.isEmpty() && adminPass == m_adminPassword
-                         && !m_adminPassword.isEmpty();
-    const bool hasPersistentGroup = m_assignByUid.contains(uid)
-                                 && m_groups.contains(m_assignByUid.value(uid));
-    const bool isRegistered = registryEntry.registered || hasPersistentGroup || adminLogin;
-    registryEntry.registered = isRegistered;
-    c->setRegistered(isRegistered);
-
-    int gid = isRegistered ? m_assignByUid.value(uid, 2) : 1; // guest = não registrado
-    if (!m_groups.contains(gid)) gid = isRegistered ? 2 : 1;
-    log(QStringLiteral("Cliente \"%1\" com UID \"%2\" conectando. GID=%3 registrado=%4")
-            .arg(nick, uid, QString::number(gid), isRegistered ? QStringLiteral("sim") : QStringLiteral("não")));
+    // grupo: atribuição persistente por UID tem prioridade; senão "normal"
+    int gid = m_assignByUid.value(uid, 0);
+    log(QStringLiteral("DEBUG: Cliente \"%1\" com UID \"%2\" conectando. GID mapeado recuperado: %3")
+            .arg(nick, uid, QString::number(gid)));
+    if (!m_groups.contains(gid)) gid = 2; // normal
     applyGroup(c, gid, false);
-    if (adminLogin) {
-        c->setRegistered(true);
-        registryEntry.registered = true;
+    // senha de administrador eleva a admin (mesmo com atribuição salva)
+    if (!adminPass.isEmpty() && adminPass == m_adminPassword && !m_adminPassword.isEmpty())
         applyGroup(c, 3, false);
-    }
 
     m_clients[c->id()] = c;
     addToChannel(c->id(), 1); // entra no canal padrão
@@ -1809,12 +1786,11 @@ void ServerCore::handleGroupList(ClientSession* c) {
         QJsonArray members;
         for (auto it = m_registry.cbegin(); it != m_registry.cend(); ++it) {
             const QString uid = it.key();
-            const int assigned = m_assignByUid.value(uid, it.value().registered ? 2 : 1);
+            const int assigned = m_assignByUid.value(uid, 2);
             if (assigned != g.id) continue;
             QJsonObject member;
             member["uid"] = uid;
             member["name"] = it.value().name;
-            member["registered"] = it.value().registered;
             member["online"] = false;
             members << member;
         }
@@ -1828,7 +1804,6 @@ void ServerCore::handleGroupList(ClientSession* c) {
             member["id"] = online->id();
             member["uid"] = online->uniqueId();
             member["name"] = online->name();
-            member["registered"] = online->registered();
             member["online"] = true;
             members << member;
         }
@@ -1947,84 +1922,11 @@ void ServerCore::handleClientSetGroup(ClientSession* c, const QJsonObject& obj) 
     }
     if (!targetUid.isEmpty()) {
         m_assignByUid[targetUid] = gid;
-        RegClient& entry = m_registry[targetUid];
-        if (!entry.firstSeen.isValid()) entry.firstSeen = QDateTime::currentDateTime();
-        entry.registered = true;
-        if (m_clients.contains(obj["id"].toInt())) m_clients[obj["id"].toInt()]->setRegistered(true);
         saveData();
         log(QStringLiteral("%1 atribuiu grupo \"%2\" ao UID %3")
                 .arg(c->name(), m_groups[gid].name, targetUid.left(16)));
         broadcastGroups();
     }
-}
-
-void ServerCore::handleRegister(ClientSession* c, const QJsonObject& obj) {
-    const bool self = !obj.contains("id") && obj.value("uid").toString().isEmpty();
-    ClientSession* target = self ? c : nullptr;
-    QString targetUid = self ? c->uniqueId() : obj.value("uid").toString().left(64);
-
-    if (!self && obj.contains("id")) {
-        const int id = obj.value("id").toInt();
-        if (!m_clients.contains(id)) {
-            sendError(c, "not_found", "Usuário não está conectado");
-            return;
-        }
-        target = m_clients.value(id);
-        targetUid = target->uniqueId();
-    }
-    if (targetUid.isEmpty()) {
-        sendError(c, "bad_uid", "Identidade do usuário ausente");
-        return;
-    }
-
-    if (self) {
-        if (c->registered()) {
-            QJsonObject done = HProto::msg("registration");
-            done["registered"] = true;
-            c->send(done);
-            return;
-        }
-        if (!hasPerm(c, "selfRegister")) {
-            sendError(c, "no_permission", "O auto-registro não está permitido neste grupo");
-            return;
-        }
-    } else if (!hasPerm(c, "registerUsers")) {
-        sendError(c, "no_permission", "Sem permissão para registrar usuários");
-        return;
-    }
-
-    RegClient& entry = m_registry[targetUid];
-    if (!entry.firstSeen.isValid()) entry.firstSeen = QDateTime::currentDateTime();
-    entry.registered = true;
-    if (target) {
-        target->setRegistered(true);
-        // Se era visitante e não possui uma atribuição explícita, passa ao
-        // grupo Normal. Uma atribuição feita pelo administrador é preservada.
-        int gid = m_assignByUid.value(targetUid, 2);
-        if (!m_groups.contains(gid) || gid == 1) gid = 2;
-        m_assignByUid[targetUid] = gid;
-        applyGroup(target, gid, true);
-    } else if (!m_assignByUid.contains(targetUid)) {
-        m_assignByUid[targetUid] = 2;
-    }
-    saveData();
-
-    QJsonObject done = HProto::msg("registration");
-    done["uid"] = targetUid;
-    done["registered"] = true;
-    if (target) done["id"] = target->id();
-    if (self) c->send(done);
-    else {
-        c->send(done);
-        if (target) target->send(done);
-    }
-    QJsonObject event = HProto::msg("user_registered");
-    event["uid"] = targetUid;
-    event["registered"] = true;
-    if (target) event["id"] = target->id();
-    broadcast(event);
-    broadcastGroups();
-    log(QStringLiteral("%1 registrou o UID %2").arg(c->name(), targetUid.left(20)));
 }
 
 void ServerCore::handleServerEdit(ClientSession* c, const QJsonObject& obj) {
