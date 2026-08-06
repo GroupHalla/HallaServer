@@ -173,6 +173,11 @@ void ServerCore::handleComplaintClear(ClientSession* c, const QJsonObject& obj) 
 
 // ============================================================= SUSSURRO (v3)
 void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "whisper")) {
+        c->setWhisperIds({});
+        sendError(c, "no_permission", "Você não tem permissão para usar sussurros");
+        return;
+    }
     QSet<int> ids;
     for (const QJsonValue& v : obj["ids"].toArray()) {
         const int id = v.toInt();

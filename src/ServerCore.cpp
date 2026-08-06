@@ -72,11 +72,11 @@ void ServerCore::sendError(ClientSession* c, const QString& code, const QString&
 void ServerCore::setupBuiltinGroups() {
     GroupDef guest;  guest.id = 1;  guest.name = "guest";
     guest.perms = QJsonObject{
-        {"poke", true}, {"privmsg", true}, {"talkPower", 10}
+        {"poke", true}, {"privmsg", true}, {"whisper", true}, {"talkPower", 10}
     };
     GroupDef normal; normal.id = 2; normal.name = "normal";
     normal.perms = QJsonObject{
-        {"poke", true}, {"privmsg", true}, {"chanCreateTemp", true},
+        {"poke", true}, {"privmsg", true}, {"whisper", true}, {"chanCreateTemp", true},
         {"talkPower", 25}
     };
     GroupDef admin;  admin.id = 3;  admin.name = "admin";
@@ -88,7 +88,7 @@ void ServerCore::setupBuiltinGroups() {
         {"chanCreateTemp", true}, {"chanCreateSemi", true},
         {"chanCreatePerm", true}, {"chanEdit", true}, {"chanDelete", true},
         {"serverEdit", true}, {"groupEdit", true}, {"poke", true},
-        {"privmsg", true}, {"ignoreChanPass", true}, {"ignoreTalkPower", true},
+        {"privmsg", true}, {"whisper", true}, {"ignoreChanPass", true}, {"ignoreTalkPower", true},
         {"talkPower", 75}
     };
     m_groups[1] = guest;
