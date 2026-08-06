@@ -166,14 +166,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          repo="GroupHalla/HallaServer"
           current="${GITHUB_REF_NAME}"
-          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+          for tag in $(gh release list --repo "$repo" --limit 100 --json tagName --jq '.[].tagName'); do
             if [ "$tag" != "$current" ]; then
-              gh release delete "$tag" --cleanup-tag --yes
+              gh release delete "$tag" --repo "$repo" --cleanup-tag --yes
             fi
           done
-          if gh release view "$current" >/dev/null 2>&1; then
-            gh release delete "$current" --yes
+          if gh release view "$current" --repo "$repo" >/dev/null 2>&1; then
+            gh release delete "$current" --repo "$repo" --yes
           fi
 
       - name: Create Release
