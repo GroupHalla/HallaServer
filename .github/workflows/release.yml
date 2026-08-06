@@ -172,6 +172,9 @@ jobs:
               gh release delete "$tag" --cleanup-tag --yes
             fi
           done
+          if gh release view "$current" >/dev/null 2>&1; then
+            gh release delete "$current" --yes
+          fi
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
