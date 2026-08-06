@@ -161,22 +161,35 @@ jobs:
         with:
           name: halla-server-linux
 
+      - name: Remover releases anteriores
+        if: startsWith(github.ref, 'refs/tags/') && github.ref_name == 'v1.0.0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          current="${GITHUB_REF_NAME}"
+          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            if [ "$tag" != "$current" ]; then
+              gh release delete "$tag" --cleanup-tag --yes
+            fi
+          done
+
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Halla Server ${{ github.ref_name }} — grupos e registro
+          name: Halla Server v1.0.0 OFICIAL
           draft: false
           prerelease: false
           files: |
             halla-server-${{ github.ref_name }}-win64.zip
             halla-server-${{ github.ref_name }}-linux-x64.tar.gz
           body: |
-            ## Halla Server ${{ github.ref_name }}
+            ## Halla Server v1.0.0 OFICIAL
 
-            ### Remoção do registro
-            * Removido o sistema de registro separado; o UID continua sendo a identidade persistente do cliente.
-            * Mantidos os grupos, cargos e atribuições persistentes por UID.
+            ### Versão oficial
+            * UID como identidade persistente do cliente.
+            * Gerenciamento de grupos, membros e cargos.
+            * Servidor compatível com Desktop e Mobile oficiais.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
