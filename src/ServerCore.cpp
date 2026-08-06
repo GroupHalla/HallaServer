@@ -2166,6 +2166,10 @@ void ServerCore::loadAvatars() {
     }
 }
 
+QJsonObject ServerCore::voiceStats() const {
+    return m_voice ? m_voice->stats() : QJsonObject{};
+}
+
 void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload) {
     if (!sender || !m_voice || payload.isEmpty()) return;
     const int chan = channelOfUser(sender->id());

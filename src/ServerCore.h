@@ -115,6 +115,7 @@ public:
 
     ClientSession* clientByVoiceToken(quint32 token) { return m_byVoiceToken.value(token, nullptr); }
     void relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload);
+    QJsonObject voiceStats() const;
 
 signals:
     void logLine(const QString& text);

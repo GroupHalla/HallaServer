@@ -159,7 +159,7 @@ void ServerQuery::handleArgs(QTcpSocket* s, const QString& cmd,
         const char* lines[] = {
             "comandos disponiveis:",
             "  login client_login_name=<u> client_login_password=<p>",
-            "  logout | quit | version | serverinfo",
+            "  logout | quit | version | serverinfo | voicestats",
             "  clientlist | channellist | gm msg=<texto>",
             "  clientkick clid=<id> reasonmsg=<texto>",
             "  banclient clid=<id> time=<min> reasonmsg=<texto>",
@@ -203,6 +203,23 @@ void ServerQuery::handleArgs(QTcpSocket* s, const QString& cmd,
         ok(s);
         return;
     }
+    if (cmd == "voicestats") {
+        const QJsonObject v = core->voiceStats();
+        sendLine(s, QStringLiteral("voice_udp_in=%1 voice_opus_frames_in=%2 voice_opus_bytes_in=%3 "
+                                   "voice_udp_out=%4 voice_opus_bytes_out=%5 voice_invalid=%6 "
+                                   "voice_unknown_token=%7 voice_send_errors=%8")
+            .arg(v["udpIn"].toVariant().toLongLong())
+            .arg(v["opusFramesIn"].toVariant().toLongLong())
+            .arg(v["opusBytesIn"].toVariant().toLongLong())
+            .arg(v["udpOut"].toVariant().toLongLong())
+            .arg(v["opusBytesOut"].toVariant().toLongLong())
+            .arg(v["invalid"].toVariant().toLongLong())
+            .arg(v["unknownToken"].toVariant().toLongLong())
+            .arg(v["sendErrors"].toVariant().toLongLong()));
+        ok(s);
+        return;
+    }
+
     if (cmd == "clientlist" || cmd == "channellist" || cmd == "banlist" ||
         cmd == "clientkick" || cmd == "banclient" || cmd == "banadd" ||
         cmd == "bandel" || cmd == "gm") {

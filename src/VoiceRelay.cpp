@@ -23,8 +23,12 @@ bool VoiceRelay::bind(quint16 port) {
 void VoiceRelay::onReadyRead() {
     while (m_socket->hasPendingDatagrams()) {
         QNetworkDatagram dg = m_socket->receiveDatagram();
+        ++m_datagramsIn;
         QByteArray data = dg.data();
-        if (data.size() < 10 || memcmp(data.constData(), "HALL", 4) != 0) continue;
+        if (data.size() < 10 || memcmp(data.constData(), "HALL", 4) != 0) {
+            ++m_invalid;
+            continue;
+        }
 
         quint32 token;
         quint16 seq;
@@ -33,6 +37,7 @@ void VoiceRelay::onReadyRead() {
 
         ClientSession* sender = m_core->clientByVoiceToken(token);
         if (!sender) {
+            ++m_unknownToken;
             m_core->log(QStringLiteral("UDP: token de voz desconhecido %1 vindo de %2:%3")
                             .arg(token)
                             .arg(dg.senderAddress().toString())
@@ -57,6 +62,8 @@ void VoiceRelay::onReadyRead() {
 
         const QByteArray payload = data.mid(10);
         if (payload.isEmpty()) continue;
+        ++m_opusFramesIn;
+        m_opusBytesIn += quint64(payload.size());
 
         // retransmite aos membros do mesmo canal (exceto o falante)
         m_core->relayVoice(sender, seq, payload);
@@ -64,5 +71,22 @@ void VoiceRelay::onReadyRead() {
 }
 
 void VoiceRelay::sendTo(const QHostAddress& addr, quint16 port, const QByteArray& packet) {
-    m_socket->writeDatagram(packet, addr, port);
+    if (!m_socket) return;
+    const qint64 written = m_socket->writeDatagram(packet, addr, port);
+    if (written < 0) { ++m_sendErrors; return; }
+    ++m_datagramsOut;
+    m_opusBytesOut += quint64(qMax<qint64>(0, written - 10));
+}
+
+QJsonObject VoiceRelay::stats() const {
+    QJsonObject out;
+    out["udpIn"] = qint64(m_datagramsIn.load());
+    out["invalid"] = qint64(m_invalid.load());
+    out["unknownToken"] = qint64(m_unknownToken.load());
+    out["opusFramesIn"] = qint64(m_opusFramesIn.load());
+    out["opusBytesIn"] = qint64(m_opusBytesIn.load());
+    out["udpOut"] = qint64(m_datagramsOut.load());
+    out["opusBytesOut"] = qint64(m_opusBytesOut.load());
+    out["sendErrors"] = qint64(m_sendErrors.load());
+    return out;
 }
