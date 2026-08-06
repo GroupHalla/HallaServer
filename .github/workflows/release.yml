@@ -182,14 +182,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Halla Server v1.0.0 OFICIAL
+          name: Halla Server ${{ github.ref_name }}
           draft: false
           prerelease: false
           files: |
             halla-server-${{ github.ref_name }}-win64.zip
             halla-server-${{ github.ref_name }}-linux-x64.tar.gz
           body: |
-            ## Halla Server v1.0.0 OFICIAL
+            ## Halla Server ${{ github.ref_name }}
 
             ### Versão oficial
             * UID como identidade persistente do cliente.
