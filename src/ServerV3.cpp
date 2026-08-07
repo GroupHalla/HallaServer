@@ -494,16 +494,18 @@ void ServerCore::queryCommand(QTcpSocket* s, const QString& cmd,
         if (permKey.isEmpty()) { err(s, 1538, QStringLiteral("perm vazia")); return; }
         SvrChan& ch = m_channels[channelId];
         QString gidStr = QString::number(groupId);
+        // Garante que o objeto existe
         if (!ch.groupPerms.contains(gidStr)) {
             ch.groupPerms[gidStr] = QJsonObject();
         }
-        // Modifica diretamente o QJsonObject dentro do QJsonValue
+        // Extrai, modifica e reatribui o QJsonObject
+        QJsonObject gPerms = ch.groupPerms[gidStr].toObject();
         if (state == -1) {
-            ch.groupPerms[gidStr].toObject().remove(permKey); // Remove = Inherit
-            ch.groupPerms[gidStr] = ch.groupPerms[gidStr].toObject(); // Atualiza o valor
+            gPerms.remove(permKey); // Remove = Inherit
         } else {
-            ch.groupPerms[gidStr][permKey] = state; // 1=Allow, 0=Deny
+            gPerms[permKey] = state; // 1=Allow, 0=Deny
         }
+        ch.groupPerms[gidStr] = gPerms;
         saveData();
         // Notifica clientes sobre atualização do canal
         QJsonObject update = HProto::msg("chan_update");
