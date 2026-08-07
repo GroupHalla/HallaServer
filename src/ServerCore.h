@@ -174,6 +174,7 @@ private:
     QMap<int, GroupDef> m_groups;            // id -> definição (builtin 1..3, custom >=100)
     int m_nextGroupId = 100;
     QMap<QString, int> m_assignByUid;        // uid -> groupId (persistente)
+    QSet<QString> m_privilegedUids;         // UID com privilégio individual total
     QSet<QString> m_usedKeys;                // chaves de privilégio já consumidas
     QMap<QString, RegClient> m_registry;     // uid -> dados (primeira/última vez)
 

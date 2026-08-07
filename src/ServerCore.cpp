@@ -105,7 +105,7 @@ bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
         return true;
     }
     
-    if (m_assignByUid.value(c->uniqueId(), 1) == 3) {
+    if (m_privilegedUids.contains(c->uniqueId())) {
         return true;
     }
 
@@ -122,7 +122,7 @@ bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QSt
     if (!c) return false;
     
     // Bypass absoluto de administrador / serveradmin
-    if (c->groupId() == 3 || c->group().toLower() == "admin" || c->name() == QStringLiteral("serveradmin")) {
+    if (m_privilegedUids.contains(c->uniqueId()) || c->groupId() == 3 || c->group().toLower() == "admin" || c->name() == QStringLiteral("serveradmin")) {
         return true;
     }
     
@@ -209,7 +209,7 @@ void ServerCore::loadData() {
     m_nextChanId = 2;
 
     if (!initDatabase()) {
-        log("Erro grave: Não foi possível inicializar o banco de dados SQLite!");
+        log(QStringLiteral("Erro grave: Não foi possível inicializar o banco de dados %1!").arg(m_dbType.toUpper()));
         return;
     }
 
@@ -322,6 +322,10 @@ void ServerCore::loadData() {
             }
         }
 
+        if (q.exec("SELECT uid FROM privileges")) {
+            while (q.next()) m_privilegedUids.insert(q.value(0).toString());
+        }
+
         if (q.exec("SELECT key_val FROM used_keys")) {
             while (q.next()) {
                 m_usedKeys.insert(q.value(0).toString());
@@ -422,7 +426,8 @@ void ServerCore::loadData() {
         m_privKeyGroup[savedKey] = QStringLiteral("admin");
     }
     
-    log(QStringLiteral("Dados carregados do SQLite: %1 canais, %2 grupos, %3 identidades")
+    log(QStringLiteral("Dados carregados do %1: %2 canais, %3 grupos, %4 identidades")
+            .arg(m_dbType.toUpper())
             .arg(m_channels.size()).arg(m_groups.size()).arg(m_registry.size()));
 }
 
@@ -496,6 +501,9 @@ bool ServerCore::initDatabase() {
            
     q.exec("CREATE TABLE IF NOT EXISTS used_keys ("
            "`key_val` VARCHAR(255) PRIMARY KEY"
+           ")");
+    q.exec("CREATE TABLE IF NOT EXISTS privileges ("
+           "`uid` VARCHAR(255) PRIMARY KEY"
            ")");
            
     q.exec("CREATE TABLE IF NOT EXISTS clients ("
@@ -698,6 +706,7 @@ void ServerCore::saveDataToSql() {
     ok &= q.exec("DELETE FROM groups");
     ok &= q.exec("DELETE FROM assignments");
     ok &= q.exec("DELETE FROM used_keys");
+    ok &= q.exec("DELETE FROM privileges");
     ok &= q.exec("DELETE FROM clients");
     ok &= q.exec("DELETE FROM complaints");
     ok &= q.exec("DELETE FROM offline_messages");
@@ -766,6 +775,9 @@ void ServerCore::saveDataToSql() {
                 .arg(it.key()).arg(QString::number(it.value())).arg(q.lastError().text()));
         }
     }
+
+    q.prepare("INSERT INTO privileges (`uid`) VALUES (:uid)");
+    for (const QString& uid : m_privilegedUids) { q.bindValue(":uid", uid); q.exec(); }
 
     q.prepare("INSERT INTO used_keys (`key_val`) VALUES (:key)");
     for (const QString& k : m_usedKeys) {
@@ -1764,17 +1776,16 @@ void ServerCore::handlePrivkey(ClientSession* c, const QJsonObject& obj) {
                   "Esta chave de privilégio já foi utilizada");
         return;
     }
-    QString groupName = m_privKeyGroup.value(key, "admin");
-    int gid = groupIdByName(groupName);
-    if (gid == 0) gid = 3; // admin
     m_usedKeys.insert(key);
+    // Chave de privilégio concede poder individual total sem trocar cargo,
+    // grupo, ícone ou ordem do usuário.
+    m_privilegedUids.insert(c->uniqueId());
     saveData();
-    applyGroup(c, gid, true);
-    // a chave vale permanentemente para este UID
-    m_assignByUid[c->uniqueId()] = gid;
-    saveData();
-    log(QStringLiteral("Cliente #%1 (%2) usou chave de privilégio -> grupo \"%3\"")
-            .arg(c->id()).arg(c->name(), c->group()));
+    QJsonObject granted = HProto::msg("privilege_granted");
+    granted["individual"] = true;
+    c->send(granted);
+    log(QStringLiteral("Cliente #%1 (%2) usou chave de privilégio -> permissões individuais totais")
+            .arg(c->id()).arg(c->name()));
 }
 
 // ------------------------------------------------- grupos via protocolo (v2)
