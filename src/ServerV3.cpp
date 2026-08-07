@@ -497,11 +497,12 @@ void ServerCore::queryCommand(QTcpSocket* s, const QString& cmd,
         if (!ch.groupPerms.contains(gidStr)) {
             ch.groupPerms[gidStr] = QJsonObject();
         }
-        QJsonObject& gPerms = ch.groupPerms[gidStr].toObject();
+        // Modifica diretamente o QJsonObject dentro do QJsonValue
         if (state == -1) {
-            gPerms.remove(permKey); // Remove = Inherit
+            ch.groupPerms[gidStr].toObject().remove(permKey); // Remove = Inherit
+            ch.groupPerms[gidStr] = ch.groupPerms[gidStr].toObject(); // Atualiza o valor
         } else {
-            gPerms[permKey] = state; // 1=Allow, 0=Deny
+            ch.groupPerms[gidStr][permKey] = state; // 1=Allow, 0=Deny
         }
         saveData();
         // Notifica clientes sobre atualização do canal
