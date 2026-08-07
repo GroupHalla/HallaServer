@@ -7,13 +7,13 @@
     "exported_at": "2026-08-03T17:29:56+02:00",
     "name": "Halla Server",
     "author": "grouphallacontact@gmail.com",
-    "description": "Servidor de comunica\u00e7\u00e3o de voz e chat nativo de alta fidelidade e lat\u00eancia ultrabaixa para o Halla. Possui atualiza\u00e7\u00e3o e download autom\u00e1tico 100% aut\u00f4nomo na inicializa\u00e7\u00e3o.",
+    "description": "Servidor de comunicação de voz e chat nativo de alta fidelidade e latência ultrabaixa para o Halla. Possui atualização e download automático 100% autônomo na inicialização.",
     "features": [],
     "docker_images": {
-        "ghcr.io\/parkervcp\/yolks:debian": "ghcr.io\/parkervcp\/yolks:debian"
+        "ghcr.io/parkervcp/yolks:debian": "ghcr.io/parkervcp/yolks:debian"
     },
     "file_denylist": [],
-    "startup": "LATEST_TAG=$(curl -s \"https:\/\/api.github.com\/repos\/GroupHalla\/HallaServer\/releases\/latest\" | grep -oP '\"tag_name\": \"\\K[^\"]+'); if [ -n \"$LATEST_TAG\" ]; then LOCAL_TAG=$(cat version.txt 2>\/dev\/null || echo \"0.0.0\"); if [ \"$LATEST_TAG\" != \"$LOCAL_TAG\" ] || [ ! -f .\/halla-server ]; then echo \">> Nova vers\u00e3o detectada ou instalando inicial: $LATEST_TAG\"; echo \">> Baixando e atualizando...\"; curl -s \"https:\/\/api.github.com\/repos\/GroupHalla\/HallaServer\/releases\/latest\" | grep -oP '\"browser_download_url\": \"\\K[^\"]+linux-x64\\.tar\\.gz' | xargs curl -L -o update.tar.gz && tar -xzf update.tar.gz --strip-components=1 && rm -f update.tar.gz && chmod +x .\/halla-server && echo \"$LATEST_TAG\" > version.txt; fi; fi; chmod +x .\/halla-server; env LD_LIBRARY_PATH=. .\/halla-server --port {{SERVER_PORT}} --max {{MAX_CLIENTS}} --name \"{{SERVER_NAME}}\"",
+    "startup": "ARCH=$(uname -m); case \"$ARCH\" in aarch64|arm64) PKG=linux-arm64;; x86_64|amd64) PKG=linux-x64;; *) echo \"Arquitetura não suportada: $ARCH\"; exit 1;; esac; API=https://api.github.com/repos/GroupHalla/HallaServer/releases/latest; LATEST_TAG=$(curl -fsSL \"$API\" | grep -oP '\"tag_name\": \"\\K[^\"]+'); if [ -z \"$LATEST_TAG\" ]; then echo \"Falha ao consultar release\"; exit 1; fi; LOCAL_TAG=$(cat version.txt 2>/dev/null || echo \"\"); if [ \"$LATEST_TAG\" != \"$LOCAL_TAG\" ] || [ ! -x ./halla-server ]; then URL=$(curl -fsSL \"$API\" | grep -oP '\"browser_download_url\": \"\\K[^\"]+' | grep \"$PKG\\.tar\\.gz$\" | head -n1); test -n \"$URL\" || { echo \"Release sem pacote $PKG\"; exit 1; }; curl -fL \"$URL\" -o update.tar.gz && tar -xzf update.tar.gz --strip-components=1 && rm -f update.tar.gz && chmod +x ./halla-server && echo \"$LATEST_TAG\" > version.txt; fi; env LD_LIBRARY_PATH=. ./halla-server --port {{SERVER_PORT}} --max {{MAX_CLIENTS}} --name \"{{SERVER_NAME}}\"",
     "config": {
         "files": "{}",
         "startup": "{\r\n    \"done\": \"iniciado\"\r\n}",

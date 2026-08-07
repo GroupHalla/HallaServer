@@ -146,9 +146,43 @@ jobs:
           name: halla-server-linux
           path: halla-server-${{ github.ref_name }}-linux-x64.tar.gz
 
+  build-linux-arm64:
+    name: Build Linux ARM64 Server
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools build-essential libqt6sql6-sqlite libqt6sql6-mysql
+      - name: Configure and Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+      - name: Prepare ARM64 Package
+        run: |
+          mkdir -p halla-server-linux-arm64/sqldrivers
+          cp build/halla-server halla-server-linux-arm64/
+          cp halla-server.ini halla-server-linux-arm64/
+          cp /usr/lib/aarch64-linux-gnu/qt6/plugins/sqldrivers/libqsqlite.so halla-server-linux-arm64/sqldrivers/
+          cp /usr/lib/aarch64-linux-gnu/qt6/plugins/sqldrivers/libqsqlmysql.so halla-server-linux-arm64/sqldrivers/
+          # Copia dependências não pertencentes à glibc do binário e drivers.
+          for f in $(find halla-server-linux-arm64 -type f \( -executable -o -name "*.so*" \)); do
+            ldd "$f" | awk '{print $3}' | while read dep; do
+              if [ -n "$dep" ] && [ -f "$dep" ]; then cp -n "$dep" halla-server-linux-arm64/ || true; fi
+            done
+          done
+          tar -czf halla-server-${{ github.ref_name }}-linux-arm64.tar.gz halla-server-linux-arm64/
+      - name: Upload ARM64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: halla-server-linux-arm64
+          path: halla-server-${{ github.ref_name }}-linux-arm64.tar.gz
+
   release:
     name: Create GitHub Release
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-linux-arm64]
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows Artifact
@@ -160,6 +194,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: halla-server-linux
+      - name: Download Linux ARM64 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: halla-server-linux-arm64
 
       - name: Remover releases anteriores
         if: startsWith(github.ref, 'refs/tags/') && github.ref_name == 'v1.0.0'
@@ -188,6 +226,7 @@ jobs:
           files: |
             halla-server-${{ github.ref_name }}-win64.zip
             halla-server-${{ github.ref_name }}-linux-x64.tar.gz
+            halla-server-${{ github.ref_name }}-linux-arm64.tar.gz
           body: |
             ## Halla Server ${{ github.ref_name }}
 
