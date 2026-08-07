@@ -75,12 +75,12 @@ void ServerCore::setupBuiltinGroups() {
     GroupDef guest;  guest.id = 1;  guest.name = "guest";
     guest.position = 0;  // Nível mais baixo
     guest.perms = QJsonObject{
-        {"join", true}, {"poke", true}, {"privmsg", true}, {"whisper", true}, {"talkPower", 10}
+        {"join", true}, {"talk", true}, {"poke", true}, {"privmsg", true}, {"whisper", true}, {"talkPower", 10}
     };
     GroupDef normal; normal.id = 2; normal.name = "normal";
     normal.position = 10;  // Nível médio
     normal.perms = QJsonObject{
-        {"join", true}, {"poke", true}, {"privmsg", true}, {"whisper", true}, {"chanCreateTemp", true},
+        {"join", true}, {"talk", true}, {"poke", true}, {"privmsg", true}, {"whisper", true}, {"chanCreateTemp", true},
         {"talkPower", 25}
     };
     GroupDef admin;  admin.id = 3;  admin.name = "admin";
