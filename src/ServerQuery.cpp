@@ -165,6 +165,13 @@ void ServerQuery::handleArgs(QTcpSocket* s, const QString& cmd,
             "  banclient clid=<id> time=<min> reasonmsg=<texto>",
             "  banadd uid=<uid> time=<min> banreason=<texto>",
             "  banlist | bandel banid=<uid>",
+            // Pilar 1: Hierarquia de Cargos (Position)
+            "  servergroupsetposition sgid=<id> position=<n>  -- Define position hierarquica do grupo",
+            "  channelgroupsetpositionreq cid=<id> gid=<id> min_position=<n>  -- Requisito de position por canal",
+            // Pilar 3: Overrides de Canal (Allow/Deny/Inherit)
+            "  channelgroupsetperm cid=<id> gid=<id> perm=<chave> state=<1|0|-1>",
+            "     state: 1=Allow (permitir), 0=Deny (negar), -1=Inherit (herdar)",
+            "  channelpermlist cid=<id>  -- Lista permissoes de canal",
             nullptr
         };
         for (int i = 0; lines[i]; ++i) sendLine(s, escape(QString::fromUtf8(lines[i])));

@@ -39,12 +39,13 @@ inline QJsonObject userJson(int id, const QString& name, const QString& uid,
                             const QString& ver, const QString& platform,
                             const QString& desc, const QString& group,
                             bool mic, bool spk, bool away, bool rec, bool cc,
-                            bool talking) {
+                            bool talking, int groupPosition = 0) {
     QJsonObject u;
     u["id"] = id; u["name"] = name; u["uid"] = uid; u["ver"] = ver;
     u["platform"] = platform; u["desc"] = desc; u["group"] = group;
     u["mic"] = mic; u["spk"] = spk; u["away"] = away; u["rec"] = rec;
     u["cc"] = cc; u["talking"] = talking;
+    u["groupPosition"] = groupPosition;  // Pilar 1: posição hierárquica
     return u;
 }
 

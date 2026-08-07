@@ -70,16 +70,21 @@ void ServerCore::sendError(ClientSession* c, const QString& code, const QString&
 
 // ================================================== grupos e permissões (v2)
 void ServerCore::setupBuiltinGroups() {
+    // Pilar 1: Position/Hierarchy - Quanto maior o número, mais alto na hierarquia
+    // Guest (position 0) < Normal (position 10) < Admin (position 100)
     GroupDef guest;  guest.id = 1;  guest.name = "guest";
+    guest.position = 0;  // Nível mais baixo
     guest.perms = QJsonObject{
         {"poke", true}, {"privmsg", true}, {"whisper", true}, {"talkPower", 10}
     };
     GroupDef normal; normal.id = 2; normal.name = "normal";
+    normal.position = 10;  // Nível médio
     normal.perms = QJsonObject{
         {"poke", true}, {"privmsg", true}, {"whisper", true}, {"chanCreateTemp", true},
         {"talkPower", 25}
     };
     GroupDef admin;  admin.id = 3;  admin.name = "admin";
+    admin.position = 100;  // Nível mais alto (como "Admin" no Discord)
     admin.perms = QJsonObject{
         {"*", true}, {"kick", true}, {"ban", true}, {"banList", true},
         {"move", true}, {"setCommander", true}, {"selfCommander", true},
@@ -118,31 +123,127 @@ bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
     return value.toBool() || value.toInt(0) > 0;
 }
 
-bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const {
+// Pilar 1: Retorna a posição hierárquica do cliente (quanto maior, mais autoridade)
+int ServerCore::clientPosition(const ClientSession* c) const {
+    if (!c) return 0;
+    const GroupDef g = m_groups.value(c->groupId(), m_groups.value(1));
+    return g.position;
+}
+
+// Pilar 1: Verifica se executor pode gerenciar (kick/ban/edit) o alvo baseado na hierarquia
+// Regra: Só pode gerenciar quem está abaixo (position menor) - igual também não pode
+bool ServerCore::canManageClient(const ClientSession* executor, const ClientSession* target) const {
+    if (!executor || !target) return false;
+    
+    // Super-admin sempre pode
+    if (executor->groupId() == 3 || executor->group().toLower() == "admin" 
+        || executor->name() == QStringLiteral("serveradmin")) {
+        return true;
+    }
+    if (m_privilegedUids.contains(executor->uniqueId())) {
+        return true;
+    }
+    
+    // Alvo com privilégio individual ou super-admin não pode ser gerenciado por não-super-admin
+    if (m_privilegedUids.contains(target->uniqueId()) || target->groupId() == 3 
+        || target->group().toLower() == "admin" || target->name() == QStringLiteral("serveradmin")) {
+        return false;
+    }
+    
+    // Pilar 1: O executor só pode gerenciar se sua posição for MAIOR que a do alvo
+    // (Igual também não pode - como no Discord, position igual = não pode)
+    int executorPos = clientPosition(executor);
+    int targetPos = clientPosition(target);
+    
+    return executorPos > targetPos;
+}
+
+// Pilar 1: Verifica se um grupo pode gerenciar outro grupo baseado no position
+bool ServerCore::canManageGroup(int executorGroupId, int targetGroupId) const {
+    if (executorGroupId <= 0 || targetGroupId <= 0) return false;
+    
+    GroupDef executorGroup = m_groups.value(executorGroupId);
+    GroupDef targetGroup = m_groups.value(targetGroupId);
+    
+    // Se executor é admin (id 3), pode gerenciar todos
+    if (executorGroup.id == 3 || executorGroup.name.toLower() == "admin") {
+        return true;
+    }
+    
+    // Regra de position: executor precisa ter position > target
+    return executorGroup.position > targetGroup.position;
+}
+
+// Pilar 3: Retorna o estado da permissão no canal (Allow=1, Deny=0, Inherit=-1, NotSet=-2)
+int ServerCore::getChannelPermState(const ClientSession* c, int channelId, const QString& permKey) const {
+    if (!c || !m_channels.contains(channelId)) return -2; // NotSet
+    
+    const SvrChan& ch = m_channels[channelId];
+    const QString gidStr = QString::number(c->groupId());
+    
+    // Verifica se há override específico para este grupo no canal
+    if (ch.groupPerms.contains(gidStr)) {
+        const QJsonObject gPerms = ch.groupPerms[gidStr].toObject();
+        
+        // Pilar 3: Permissões de canal com 3 estados
+        // traverse é especial: se não tiver traverse, não pode nem entrar
+        if (permKey == QStringLiteral("join") && gPerms.contains("traverse")) {
+            bool traverse = gPerms.value("traverse").toBool();
+            if (!traverse) return 0; // Deny - não pode traversar
+        }
+        
+        if (gPerms.contains(permKey)) {
+            QJsonValue val = gPerms.value(permKey);
+            // Suporta tanto bool quanto int para compatibilidade
+            if (val.isBool()) {
+                return val.toBool() ? 1 : 0; // Allow=true, Deny=false
+            } else if (val.isDouble()) {
+                int state = val.toInt();
+                if (state == 1) return 1;   // Allow
+                if (state == 0) return 0;   // Deny
+                if (state == -1) return -1; // Inherit
+            }
+        }
+    }
+    
+    // Verifica posição hierárquica para acessar canal (Pilar 1)
+    // Se houver requisito de position no canal para este grupo, verifica
+    if (ch.groupPositionReqs.contains(gidStr)) {
+        int requiredPos = ch.groupPositionReqs[gidStr].toInt();
+        int clientPos = clientPosition(c);
+        if (clientPos < requiredPos) {
+            return 0; // Deny - posição insuficiente
+        }
+    }
+    
+    return -1; // Inherit - usa permissão do servidor
+}
+
+// Pilar 3: Verifica permissão efetiva de canal considerando Allow/Deny/Inherit
+bool ServerCore::hasEffectiveChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const {
     if (!c) return false;
     
     // Bypass absoluto de administrador / serveradmin
-    if (m_privilegedUids.contains(c->uniqueId()) || c->groupId() == 3 || c->group().toLower() == "admin" || c->name() == QStringLiteral("serveradmin")) {
+    if (m_privilegedUids.contains(c->uniqueId()) || c->groupId() == 3 
+        || c->group().toLower() == "admin" || c->name() == QStringLiteral("serveradmin")) {
         return true;
     }
     
     // Se o canal não existe, retorna true por padrão (usa permissões globais)
     if (!m_channels.contains(channelId)) return true;
     
-    const SvrChan& ch = m_channels[channelId];
+    int state = getChannelPermState(c, channelId, permKey);
+    
+    // Pilar 3: Lógica dos 3 estados
+    if (state == 1) return true;   // Allow - forçado a true
+    if (state == 0) return false;  // Deny - forçado a false
+    // state == -1 (Inherit) ou -2 (NotSet): usa permissão do servidor
+    return hasPerm(c, permKey.toLatin1().constData());
+}
 
-    // Se o grupo do usuário tem uma regra específica configurada neste canal.
-    const QString gidStr = QString::number(c->groupId());
-    if (ch.groupPerms.contains(gidStr)) {
-        const QJsonObject gPerms = ch.groupPerms[gidStr].toObject();
-        // "Percorrer" é a permissão de alcance do canal; sem ela não há
-        // entrada mesmo que "Entrar" esteja herdando a regra global.
-        if (permKey == QStringLiteral("join") && gPerms.contains("traverse")
-                && !gPerms.value("traverse").toBool()) return false;
-        if (gPerms.contains(permKey)) return gPerms.value(permKey).toBool();
-    }
-
-    return true;
+// Compatibilidade: hasChannelPerm agora usa hasEffectiveChannelPerm
+bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const {
+    return hasEffectiveChannelPerm(c, channelId, permKey);
 }
 
 int ServerCore::talkPower(const ClientSession* c) const {
@@ -167,6 +268,7 @@ QJsonObject ServerCore::groupToJson(const GroupDef& g) const {
     o["sigla"] = g.sigla;
     o["order"] = g.order;
     o["icon"] = g.icon;
+    o["position"] = g.position;  // Pilar 1: posição hierárquica
     return o;
 }
 
@@ -177,6 +279,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     c->setSigla(m_groups[groupId].sigla);
     c->setIcon(m_groups[groupId].icon);
     c->setGroupOrder(m_groups[groupId].order);
+    c->setGroupPosition(m_groups[groupId].position);  // Pilar 1: position hierárquico
     if (announce) {
         QJsonObject m = HProto::msg("user_group");
         m["id"] = c->id();
@@ -185,6 +288,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         m["sigla"] = m_groups[groupId].sigla;
         m["icon"] = m_groups[groupId].icon;
         m["order"] = m_groups[groupId].order;
+        m["position"] = m_groups[groupId].position;  // Pilar 1
         broadcast(m);
     }
 }
@@ -253,7 +357,7 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index, linked_channels FROM channels")) {
+        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index, linked_channels, group_position_reqs FROM channels")) {
             while (q.next()) {
                 SvrChan c;
                 c.id = q.value(0).toInt();
@@ -280,6 +384,8 @@ void ServerCore::loadData() {
                     if (linkedId > 0 && linkedId != c.id && !c.linkedChannels.contains(linkedId))
                         c.linkedChannels << linkedId;
                 }
+                // Pilar 1: Requisitos de position por grupo no canal
+                c.groupPositionReqs = QJsonDocument::fromJson(q.value(18).toString().toUtf8()).object();
                 
                 if (c.id == 1) {
                     m_channels[1] = c;
@@ -290,7 +396,7 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT id, name, sigla, order_index, icon, perms FROM groups")) {
+        if (q.exec("SELECT id, name, sigla, order_index, icon, perms, position FROM groups")) {
             while (q.next()) {
                 GroupDef g;
                 g.id = q.value(0).toInt();
@@ -298,6 +404,7 @@ void ServerCore::loadData() {
                 g.sigla = q.value(2).toString();
                 g.order = q.value(3).toInt();
                 g.icon = q.value(4).toString();
+                g.position = q.value(6).toInt(0);  // Pilar 1: position hierárquico
                 
                 QJsonDocument doc = QJsonDocument::fromJson(q.value(5).toString().toUtf8());
                 g.perms = doc.object();
@@ -306,11 +413,12 @@ void ServerCore::loadData() {
                     m_groups[g.id] = g;
                     m_nextGroupId = qMax(m_nextGroupId, g.id + 1);
                 } else {
-                    // Atualiza campos de sigla, order e icon nos grupos built-in carregados
+                    // Atualiza campos de sigla, order, icon e position nos grupos built-in carregados
                     if (m_groups.contains(g.id)) {
                         m_groups[g.id].sigla = g.sigla;
                         m_groups[g.id].order = g.order;
                         m_groups[g.id].icon = g.icon;
+                        m_groups[g.id].position = g.position;  // Pilar 1
                     }
                 }
             }
@@ -476,14 +584,16 @@ bool ServerCore::initDatabase() {
            "`group_perms` TEXT, "
            "`no_symbol` INT DEFAULT 0, "
            "`order_index` INT DEFAULT 0, "
-           "`linked_channels` TEXT"
-           ")");
+           "`linked_channels` TEXT, "
+           "`group_position_reqs` TEXT"
+           ")");  // Pilar 1: requisitos de position por grupo no canal
     // Migração silenciosa de bancos criados antes das opções visuais e de
     // áudio vinculado. O erro de coluna já existente é intencionalmente
     // ignorado para manter bancos atuais compatíveis.
     q.exec("ALTER TABLE channels ADD COLUMN `no_symbol` INT DEFAULT 0");
     q.exec("ALTER TABLE channels ADD COLUMN `order_index` INT DEFAULT 0");
     q.exec("ALTER TABLE channels ADD COLUMN `linked_channels` TEXT");
+    q.exec("ALTER TABLE channels ADD COLUMN `group_position_reqs` TEXT");  // Pilar 1
            
     q.exec("CREATE TABLE IF NOT EXISTS groups ("
            "`id` INT PRIMARY KEY, "
@@ -491,8 +601,9 @@ bool ServerCore::initDatabase() {
            "`sigla` VARCHAR(255), "
            "`order_index` INT, "
            "`icon` VARCHAR(255), "
-           "`perms` TEXT"
-           ")");
+           "`perms` TEXT, "
+           "`position` INT DEFAULT 0"
+           ")");  // Pilar 1: position hierárquica do grupo
            
     q.exec("CREATE TABLE IF NOT EXISTS assignments ("
            "`uid` VARCHAR(255) PRIMARY KEY, "
@@ -618,6 +729,7 @@ void ServerCore::loadDataFromJson() {
         g.sigla = o["sigla"].toString();
         g.order = o["order"].toInt(0);
         g.icon = o["icon"].toString();
+        g.position = o["position"].toInt(0);  // Pilar 1: position hierárquica
         if (g.id >= 100 && !g.name.isEmpty()) {
             m_groups[g.id] = g;
             m_nextGroupId = qMax(m_nextGroupId, g.id + 1);
@@ -625,6 +737,7 @@ void ServerCore::loadDataFromJson() {
             m_groups[g.id].sigla = g.sigla;
             m_groups[g.id].order = g.order;
             m_groups[g.id].icon = g.icon;
+            m_groups[g.id].position = g.position;  // Pilar 1
         }
     }
     const QJsonObject assign = root["assignments"].toObject();
@@ -722,8 +835,8 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
     }
 
-    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`) "
-              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol, :order_index, :linked_channels)");
+    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`, `group_position_reqs`) "
+              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol, :order_index, :linked_channels, :group_position_reqs)");
     for (const SvrChan& c : m_channels) {
         if (c.type == 0) continue;
         q.bindValue(":id", c.id);
@@ -747,13 +860,16 @@ void ServerCore::saveDataToSql() {
         for (int linkedId : c.linkedChannels) linked << linkedId;
         q.bindValue(":linked_channels",
                     QString::fromUtf8(QJsonDocument(linked).toJson(QJsonDocument::Compact)));
+        // Pilar 1: Salva requisitos de position por grupo no canal
+        q.bindValue(":group_position_reqs",
+                    QString::fromUtf8(QJsonDocument(c.groupPositionReqs).toJson(QJsonDocument::Compact)));
         if (!q.exec()) {
             log("SQL SAVE ERROR on channels: " + q.lastError().text());
         }
     }
 
-    q.prepare("INSERT INTO groups (`id`, `name`, `sigla`, `order_index`, `icon`, `perms`) "
-              "VALUES (:id, :name, :sigla, :order_index, :icon, :perms)");
+    q.prepare("INSERT INTO groups (`id`, `name`, `sigla`, `order_index`, `icon`, `perms`, `position`) "
+              "VALUES (:id, :name, :sigla, :order_index, :icon, :perms, :position)");
     for (const GroupDef& g : m_groups) {
         q.bindValue(":id", g.id);
         q.bindValue(":name", g.name);
@@ -761,6 +877,7 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":order_index", g.order);
         q.bindValue(":icon", g.icon);
         q.bindValue(":perms", QString::fromUtf8(QJsonDocument(g.perms).toJson(QJsonDocument::Compact)));
+        q.bindValue(":position", g.position);  // Pilar 1: position hierárquica
         if (!q.exec()) {
             log("SQL SAVE ERROR on groups: " + q.lastError().text());
         }
@@ -1702,6 +1819,11 @@ void ServerCore::handleKick(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "no_permission", "Você não pode expulsar este cliente");
         return;
     }
+    // Pilar 1: Verificação de hierarquia - só pode kickar quem está abaixo na hierarquia
+    if (!canManageClient(c, m_clients[id])) {
+        sendError(c, "no_permission", "Você não tem posição hierárquica suficiente para expulsar este cliente");
+        return;
+    }
     doKick(m_clients[id], obj["reason"].toString(), fromServer, false);
 }
 
@@ -1714,6 +1836,11 @@ void ServerCore::handleBan(ClientSession* c, const QJsonObject& obj) {
     if (!m_clients.contains(id) || id == c->id()) return;
     if (!hasPerm(c, "*") && hasPerm(m_clients[id], "*")) {
         sendError(c, "no_permission", "Você não pode banir este cliente");
+        return;
+    }
+    // Pilar 1: Verificação de hierarquia - só pode banir quem está abaixo na hierarquia
+    if (!canManageClient(c, m_clients[id])) {
+        sendError(c, "no_permission", "Você não tem posição hierárquica suficiente para banir este cliente");
         return;
     }
     const int minutes = obj["minutes"].toInt(0);
@@ -1851,6 +1978,8 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         if (obj.contains("sigla")) g.sigla = obj["sigla"].toString();
         if (obj.contains("order")) g.order = obj["order"].toInt(0);
         if (obj.contains("icon")) g.icon = obj["icon"].toString();
+        // Pilar 1: position hierárquica
+        if (obj.contains("position")) g.position = obj["position"].toInt(0);
         m_groups[id] = g;
     } else {
         if (name.isEmpty()) return; // criação exige nome
@@ -1860,6 +1989,8 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         g.sigla = obj["sigla"].toString();
         g.order = obj["order"].toInt(0);
         g.icon = obj["icon"].toString();
+        // Pilar 1: position hierárquica (padrão baseado no próximo grupo)
+        g.position = obj["position"].toInt(g.order * 10);
         if (g.perms.value("*").toBool() && !hasPerm(c, "*")) {
             sendError(c, "no_permission", "Apenas administradores (*) criam grupos com *");
             return;
@@ -1874,6 +2005,7 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
             o->setSigla(g.sigla);
             o->setIcon(g.icon);
             o->setGroupOrder(g.order);
+            o->setGroupPosition(g.position);  // Pilar 1
             QJsonObject m = HProto::msg("user_group");
             m["id"] = o->id(); 
             m["group"] = o->group(); 
@@ -1881,6 +2013,7 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
             m["sigla"] = g.sigla;
             m["icon"] = g.icon;
             m["order"] = g.order;
+            m["position"] = g.position;  // Pilar 1
             broadcast(m);
         }
     broadcastGroups();
@@ -2072,6 +2205,14 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
             c.linkedChannels << linkedId;
     }
     for (const QJsonValue& v : o["ops"].toArray()) c.ops << v.toString();
+    // Pilar 1: Carrega requisitos de position por grupo do canal
+    if (o.contains("groupPositionReqs")) {
+        c.groupPositionReqs = o["groupPositionReqs"].toObject();
+    }
+    // Pilar 3: Carrega groupPerms (pode conter estados Allow/Deny/Inherit)
+    if (o.contains("groupPerms")) {
+        c.groupPerms = o["groupPerms"].toObject();
+    }
     return c;
 }
 
@@ -2089,6 +2230,14 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
     QJsonArray ops;
     for (const QString& u : c.ops) ops << u;
     j["ops"] = ops;
+    // Pilar 1: Requisitos de position por grupo no canal
+    if (!c.groupPositionReqs.isEmpty()) {
+        j["groupPositionReqs"] = c.groupPositionReqs;
+    }
+    // Pilar 3: Permissões de canal com estados Allow/Deny/Inherit
+    if (!c.groupPerms.isEmpty()) {
+        j["groupPerms"] = c.groupPerms;
+    }
     return j;
 }
 

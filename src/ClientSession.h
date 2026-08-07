@@ -28,6 +28,7 @@ public:
     QString sigla() const { return m_sigla; }
     QString icon() const { return m_icon; }
     int groupOrder() const { return m_groupOrder; }
+    int groupPosition() const { return m_groupPosition; }  // Pilar 1: posição hierárquica
     QHostAddress ip() const;
 
     bool micMuted() const { return m_micMuted; }
@@ -56,6 +57,7 @@ public:
     void setSigla(const QString& s)         { m_sigla = s; }
     void setIcon(const QString& i)          { m_icon = i; }
     void setGroupOrder(int o)               { m_groupOrder = o; }
+    void setGroupPosition(int p)            { m_groupPosition = p; }  // Pilar 1
     void setMicMuted(bool v)                { m_micMuted = v; }
     void setSpkMuted(bool v)                { m_spkMuted = v; }
     void setAway(bool v)                    { m_away = v; }
@@ -101,6 +103,7 @@ private:
     QString m_sigla;
     QString m_icon;
     int m_groupOrder = 0;
+    int m_groupPosition = 0;  // Pilar 1: posição hierárquica do grupo
     bool m_micMuted = false;
     bool m_spkMuted = false;
     bool m_away = false;

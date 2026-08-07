@@ -55,6 +55,7 @@ QJsonObject ClientSession::toJson(bool) const {
     u["sigla"] = m_sigla;
     u["icon"] = m_icon;
     u["order"] = m_groupOrder;
+    u["position"] = m_groupPosition;  // Pilar 1: posição hierárquica
     u["mic"] = m_micMuted; u["spk"] = m_spkMuted; u["away"] = m_away;
     u["rec"] = m_recording; u["cc"] = m_commander; u["talking"] = m_talking;
     u["whispering"] = (m_talking && !m_whisperIds.isEmpty());

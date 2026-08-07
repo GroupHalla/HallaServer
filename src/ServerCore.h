@@ -44,7 +44,8 @@ struct GroupDef {
     int id = 0;
     QString name;
     QString sigla; // tag/abbreviation, e.g. "[Mod]"
-    int order = 0; // sorting index/hierarchy order
+    int order = 0; // sorting index/hierarchy order (for display)
+    int position = 0; // Pilar 1: posição hierárquica (quanto maior, mais autoridade) - Discord-style
     QString icon;  // icon identifier or index
     QJsonObject perms; // { "*":true } = tudo; chaves: kick, ban, banList, move,
                        // chanCreateTemp, chanCreateSemi, chanCreatePerm, chanEdit,
@@ -162,7 +163,12 @@ private:
         int type, codec, quality, maxClients;
         int bitrate = 96; // de 16kbps a 384kbps (padrão 96)
         int order = 0;    // posição relativa entre canais irmãos
-        QJsonObject groupPerms; // permissões de canais por cargo/grupo { "groupId": { "perm": bool } }
+        // Pilar 3: Permissões exclusivas de canal (Discord-style Overrides)
+        // GrupoOverride: { "groupId": { "permKey": state } } onde state é:
+        //   1 = Allow (permite/força), 0 = Deny (nega/corta), -1 = Inherit (herda do servidor)
+        QJsonObject groupPerms; // permissões de canais por cargo/grupo { "groupId": { "perm": state } }
+        // Pilar 1: Hierarquia - mapeia grupo -> posição mínima necessária para operar no canal
+        QJsonObject groupPositionReqs; // { "groupId": minPosition } - exige position >= valor
         QList<int> linkedChannels; // relação simétrica de áudio entre canais
         QList<int> users;
         QList<QString> ops; // v3: UIDs dos operadores do canal (criador + promovidos)
@@ -259,6 +265,15 @@ private:
     void applyGroup(ClientSession* c, int groupId, bool announce);
     int groupIdByName(const QString& name) const;
     void setupBuiltinGroups();
+    
+    // Pilar 1: Hierarquia de Cargos (Discord-style position)
+    int clientPosition(const ClientSession* c) const;
+    bool canManageClient(const ClientSession* executor, const ClientSession* target) const;
+    bool canManageGroup(int executorGroupId, int targetGroupId) const;
+    
+    // Pilar 3: Resolver permissão de canal com overrides (Allow/Deny/Inherit)
+    int getChannelPermState(const ClientSession* c, int channelId, const QString& permKey) const;
+    bool hasEffectiveChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const;
 
     void sendError(ClientSession* c, const QString& code, const QString& msg);
     void broadcast(const QJsonObject& obj, int exceptId = -1);

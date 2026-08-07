@@ -429,5 +429,124 @@ void ServerCore::queryCommand(QTcpSocket* s, const QString& cmd,
         return;
     }
 
+    // Pilar 1: Gerenciar position de grupos
+    if (cmd == QLatin1String("servergroupsetposition")) {
+        const int groupId = args.value(QStringLiteral("sgid")).toInt();
+        const int position = args.value(QStringLiteral("position")).toInt();
+        if (groupId <= 0) { err(s, 1538, QStringLiteral("sgid invalido")); return; }
+        if (!m_groups.contains(groupId)) { err(s, 1281, QStringLiteral("grupo nao encontrado")); return; }
+        GroupDef& g = m_groups[groupId];
+        g.position = position;
+        saveData();
+        // Atualiza clientes conectados com este grupo
+        for (ClientSession* o : m_clients) {
+            if (o->groupId() == groupId) {
+                o->setGroupPosition(position);
+            }
+        }
+        broadcastGroups();
+        log(QStringLiteral("ServerQuery: position do grupo #%1 ajustada para %2").arg(groupId).arg(position));
+        ok(s);
+        return;
+    }
+
+    // Pilar 1: Adicionar requisito de position para grupo em canal
+    if (cmd == QLatin1String("channelgroupsetpositionreq")) {
+        const int channelId = args.value(QStringLiteral("cid")).toInt();
+        const int groupId = args.value(QStringLiteral("gid")).toInt();
+        const int minPosition = args.value(QStringLiteral("min_position")).toInt();
+        if (channelId <= 0 || !m_channels.contains(channelId)) {
+            err(s, 1281, QStringLiteral("canal nao encontrado")); return;
+        }
+        if (groupId <= 0 || !m_groups.contains(groupId)) {
+            err(s, 1281, QStringLiteral("grupo nao encontrado")); return;
+        }
+        SvrChan& ch = m_channels[channelId];
+        QString gidStr = QString::number(groupId);
+        if (minPosition < 0) {
+            ch.groupPositionReqs.remove(gidStr);
+        } else {
+            ch.groupPositionReqs[gidStr] = minPosition;
+        }
+        saveData();
+        // Notifica clientes sobre atualização do canal
+        QJsonObject update = HProto::msg("chan_update");
+        update["chan"] = chanToJson(ch);
+        broadcast(update);
+        log(QStringLiteral("ServerQuery: requisito de position do grupo #%1 no canal #%2 ajustado para %3")
+                .arg(groupId).arg(channelId).arg(minPosition));
+        ok(s);
+        return;
+    }
+
+    // Pilar 3: Definir permissão de canal para grupo (Allow=1, Deny=0, Inherit=-1)
+    if (cmd == QLatin1String("channelgroupsetperm")) {
+        const int channelId = args.value(QStringLiteral("cid")).toInt();
+        const int groupId = args.value(QStringLiteral("gid")).toInt();
+        const QString permKey = args.value(QStringLiteral("perm"));
+        const int state = args.value(QStringLiteral("state")).toInt(); // 1=Allow, 0=Deny, -1=Inherit
+        if (channelId <= 0 || !m_channels.contains(channelId)) {
+            err(s, 1281, QStringLiteral("canal nao encontrado")); return;
+        }
+        if (groupId <= 0 || !m_groups.contains(groupId)) {
+            err(s, 1281, QStringLiteral("grupo nao encontrado")); return;
+        }
+        if (permKey.isEmpty()) { err(s, 1538, QStringLiteral("perm vazia")); return; }
+        SvrChan& ch = m_channels[channelId];
+        QString gidStr = QString::number(groupId);
+        if (!ch.groupPerms.contains(gidStr)) {
+            ch.groupPerms[gidStr] = QJsonObject();
+        }
+        QJsonObject& gPerms = ch.groupPerms[gidStr].toObject();
+        if (state == -1) {
+            gPerms.remove(permKey); // Remove = Inherit
+        } else {
+            gPerms[permKey] = state; // 1=Allow, 0=Deny
+        }
+        saveData();
+        // Notifica clientes sobre atualização do canal
+        QJsonObject update = HProto::msg("chan_update");
+        update["chan"] = chanToJson(ch);
+        broadcast(update);
+        log(QStringLiteral("ServerQuery: permissao %1 do grupo #%2 no canal #%3 ajustada para %4")
+                .arg(permKey).arg(groupId).arg(channelId)
+                .arg(state == 1 ? "Allow" : (state == 0 ? "Deny" : "Inherit")));
+        ok(s);
+        return;
+    }
+
+    // Pilar 3: Obter permissões de canal (debug)
+    if (cmd == QLatin1String("channelpermlist")) {
+        const int channelId = args.value(QStringLiteral("cid")).toInt();
+        if (channelId <= 0 || !m_channels.contains(channelId)) {
+            err(s, 1281, QStringLiteral("canal nao encontrado")); return;
+        }
+        const SvrChan& ch = m_channels[channelId];
+        for (auto it = ch.groupPerms.begin(); it != ch.groupPerms.end(); ++it) {
+            const QJsonObject gPerms = it.value().toObject();
+            for (auto permIt = gPerms.begin(); permIt != gPerms.end(); ++permIt) {
+                QJsonValue val = permIt.value();
+                QString stateStr;
+                if (val.isBool()) {
+                    stateStr = val.toBool() ? "Allow" : "Deny";
+                } else if (val.isDouble()) {
+                    int s = val.toInt();
+                    stateStr = s == 1 ? "Allow" : (s == 0 ? "Deny" : (s == -1 ? "Inherit" : QString::number(s)));
+                } else {
+                    stateStr = "unknown";
+                }
+                line(QStringLiteral("cid=%1 gid=%2 perm=%3 state=%4")
+                    .arg(channelId).arg(it.key()).arg(permIt.key()).arg(stateStr));
+            }
+        }
+        // Requisitos de position
+        for (auto it = ch.groupPositionReqs.begin(); it != ch.groupPositionReqs.end(); ++it) {
+            line(QStringLiteral("cid=%1 gid=%2 min_position=%3")
+                .arg(channelId).arg(it.key()).arg(it.value().toInt()));
+        }
+        ok(s);
+        return;
+    }
+
     err(s, 256, QStringLiteral("comando nao implementado"));
 }
