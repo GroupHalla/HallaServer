@@ -1447,8 +1447,10 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
-    const QString name = obj["name"].toString().trimmed();
-    if (name.isEmpty()) return;
+    const QString name = obj["name"].toString().left(255);
+    // Aceita espaços iniciais/finais decorativos, mas rejeita nome composto
+    // somente de espaço.
+    if (name.trimmed().isEmpty()) return;
 
     SvrChan ch;
     ch.id = m_nextChanId++;
@@ -1620,7 +1622,7 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     SvrChan& ch = m_channels[id];
-    if (obj.contains("name")) ch.name = obj["name"].toString().trimmed();
+    if (obj.contains("name") && !obj["name"].toString().trimmed().isEmpty()) ch.name = obj["name"].toString().left(255);
     if (obj.contains("noSymbol")) ch.noSymbol = obj["noSymbol"].toBool();
     if (obj.contains("topic")) ch.topic = obj["topic"].toString().left(80);
     if (obj.contains("desc")) ch.desc = obj["desc"].toString();
