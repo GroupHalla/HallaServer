@@ -22,9 +22,9 @@
     },
     "scripts": {
         "installation": {
-            "script": null,
-            "container": "alpine:3.4",
-            "entrypoint": "ash"
+            "script": "#!/bin/bash\nset -e\necho \">> Preparando diretório do Halla Server...\"\nmkdir -p /mnt/server\ncd /mnt/server\ntouch version.txt\necho \">> Instalação base concluída. O servidor será baixado automaticamente no primeiro Start.\"\n",
+            "container": "ghcr.io/parkervcp/installers:debian",
+            "entrypoint": "bash"
         }
     },
     "variables": []
