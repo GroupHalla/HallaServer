@@ -358,10 +358,10 @@ void ServerCore::loadData() {
         }
 
         // Tenta carregar canais - verifica se as colunas existem
-        if (!q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index, linked_channels, group_position_reqs FROM channels")) {
+        if (!q.exec("SELECT `id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`, `group_position_reqs` FROM channels")) {
             log("AVISO: Falha ao carregar canais - talvez as colunas não existam. Erro: " + q.lastError().text());
             // Tenta versão sem a coluna nova
-            if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index, linked_channels FROM channels")) {
+            if (q.exec("SELECT `id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels` FROM channels")) {
                 log("Carregando canais com esquema antigo (sem group_position_reqs)");
                 while (q.next()) {
                     SvrChan c;
