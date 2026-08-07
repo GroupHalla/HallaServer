@@ -170,6 +170,9 @@ jobs:
           # Copia dependências não pertencentes à glibc do binário e drivers.
           for f in $(find halla-server-linux-arm64 -type f \( -executable -o -name "*.so*" \)); do
             ldd "$f" | awk '{print $3}' | while read dep; do
+              case "$(basename "$dep")" in
+                libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|ld-linux-*.so.*) continue ;;
+              esac
               if [ -n "$dep" ] && [ -f "$dep" ]; then cp -n "$dep" halla-server-linux-arm64/ || true; fi
             done
           done
