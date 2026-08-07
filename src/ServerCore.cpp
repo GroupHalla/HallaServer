@@ -357,7 +357,44 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index, linked_channels, group_position_reqs FROM channels")) {
+        // Tenta carregar canais - verifica se as colunas existem
+        if (!q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index, linked_channels, group_position_reqs FROM channels")) {
+            log("AVISO: Falha ao carregar canais - talvez as colunas não existam. Erro: " + q.lastError().text());
+            // Tenta versão sem a coluna nova
+            if (q.exec("SELECT id, parentId, name, topic, desc, password, isDefault, type, moderated, codec, codecQuality, maxClients, ntalk, bitrate, group_perms, no_symbol, order_index, linked_channels FROM channels")) {
+                log("Carregando canais com esquema antigo (sem group_position_reqs)");
+                while (q.next()) {
+                    SvrChan c;
+                    c.id = q.value(0).toInt();
+                    c.parent = q.value(1).toInt();
+                    c.name = q.value(2).toString();
+                    c.topic = q.value(3).toString();
+                    c.desc = q.value(4).toString();
+                    c.password = q.value(5).toString();
+                    c.def = q.value(6).toInt() != 0;
+                    c.type = q.value(7).toInt();
+                    c.moderated = q.value(8).toInt() != 0;
+                    c.codec = q.value(9).toInt();
+                    c.quality = q.value(10).toInt();
+                    c.maxClients = q.value(11).toInt();
+                    c.ntalk = q.value(12).toInt();
+                    c.bitrate = q.value(13).toInt();
+                    if (c.bitrate <= 0) c.bitrate = 96;
+                    c.groupPerms = QJsonDocument::fromJson(q.value(14).toString().toUtf8()).object();
+                    c.noSymbol = q.value(15).toInt() != 0;
+                    c.order = q.value(16).toInt();
+                    const QJsonDocument linkedDoc = QJsonDocument::fromJson(q.value(17).toString().toUtf8());
+                    for (const QJsonValue& value : linkedDoc.array()) {
+                        const int linkedId = value.toInt();
+                        if (linkedId > 0 && linkedId != c.id && !c.linkedChannels.contains(linkedId))
+                            c.linkedChannels << linkedId;
+                    }
+                    // groupPositionReqs vazio para esquema antigo
+                    if (c.id == 1) m_channels[1] = c; else m_channels.insert(c.id, c);
+                    m_nextChanId = qMax(m_nextChanId, c.id + 1);
+                }
+            }
+        } else {
             while (q.next()) {
                 SvrChan c;
                 c.id = q.value(0).toInt();
@@ -800,6 +837,11 @@ void ServerCore::loadBansFromJson() {
 }
 
 void ServerCore::saveData() {
+    // Só salva se houver dados carregados no servidor
+    if (m_channels.isEmpty() && m_groups.isEmpty()) {
+        log("AVISO: não será salvo pois não há dados carregados no servidor");
+        return;
+    }
     saveDataToSql();
 }
 
