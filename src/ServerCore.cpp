@@ -107,9 +107,7 @@ void ServerCore::setupBuiltinGroups() {
 bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
     if (!c) return false;
     
-    // OVERRIDE TOTAL: Qualquer um no grupo admin (id 3 ou nome admin), ou usando o nickname "serveradmin",
-    // ou se o UID estiver mapeado permanentemente para o grupo administrador (3) possui controle ABSOLUTO.
-    if (c->groupId() == 3 || c->group().toLower() == "admin" || c->name() == QStringLiteral("serveradmin")) {
+    if (c->name() == QStringLiteral("serveradmin")) {
         return true;
     }
     
@@ -117,20 +115,33 @@ bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
         return true;
     }
 
-    const GroupDef g = m_groups.value(c->groupId(), m_groups.value(1));
-    if (g.id == 3 || g.name.toLower() == "admin" || g.perms.value(QStringLiteral("*")).toBool()) {
-        return true;
-    }
+    QList<int> gids = m_assignByUid.value(c->uniqueId());
+    if (gids.isEmpty()) gids << 2; // normal por padrão
     
-    const QJsonValue value = g.perms.value(QString::fromLatin1(key));
-    return value.toBool() || value.toInt(0) > 0;
+    for (int gid : gids) {
+        const GroupDef g = m_groups.value(gid, m_groups.value(1));
+        if (g.id == 3 || g.name.toLower() == "admin" || g.perms.value(QStringLiteral("*")).toBool()) {
+            return true;
+        }
+        const QJsonValue value = g.perms.value(QString::fromLatin1(key));
+        if (value.toBool() || value.toInt(0) > 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Pilar 1: Retorna a posição hierárquica do cliente (quanto maior, mais autoridade)
 int ServerCore::clientPosition(const ClientSession* c) const {
     if (!c) return 0;
-    const GroupDef g = m_groups.value(c->groupId(), m_groups.value(1));
-    return g.position;
+    QList<int> gids = m_assignByUid.value(c->uniqueId());
+    if (gids.isEmpty()) gids << 2;
+    int maxPos = 0;
+    for (int gid : gids) {
+        const GroupDef g = m_groups.value(gid, m_groups.value(1));
+        maxPos = qMax(maxPos, g.position);
+    }
+    return maxPos;
 }
 
 // Pilar 1: Verifica se executor pode gerenciar (kick/ban/edit) o alvo baseado na hierarquia
@@ -182,44 +193,47 @@ int ServerCore::getChannelPermState(const ClientSession* c, int channelId, const
     if (!c || !m_channels.contains(channelId)) return -2; // NotSet
     
     const SvrChan& ch = m_channels[channelId];
-    const QString gidStr = QString::number(c->groupId());
+    QList<int> gids = m_assignByUid.value(c->uniqueId());
+    if (gids.isEmpty()) gids << 2;
     
-    // Verifica se há override específico para este grupo no canal
-    if (ch.groupPerms.contains(gidStr)) {
-        const QJsonObject gPerms = ch.groupPerms[gidStr].toObject();
-        
-        // Pilar 3: Permissões de canal com 3 estados
-        // traverse é especial: se não tiver traverse, não pode nem entrar
-        if (permKey == QStringLiteral("join") && gPerms.contains("traverse")) {
-            bool traverse = gPerms.value("traverse").toBool();
-            if (!traverse) return 0; // Deny - não pode traversar
+    int resolvedState = -2;
+    
+    for (int gid : gids) {
+        const QString gidStr = QString::number(gid);
+        if (ch.groupPerms.contains(gidStr)) {
+            const QJsonObject gPerms = ch.groupPerms[gidStr].toObject();
+            
+            if (permKey == QStringLiteral("join") && gPerms.contains("traverse")) {
+                bool traverse = gPerms.value("traverse").toBool();
+                if (!traverse) return 0; // Deny total de travessia tem precedência absoluta
+            }
+            
+            if (gPerms.contains(permKey)) {
+                QJsonValue val = gPerms.value(permKey);
+                int state = -1;
+                if (val.isBool()) state = val.toBool() ? 1 : 0;
+                else if (val.isDouble()) state = val.toInt();
+                
+                if (state == 1) {
+                    resolvedState = 1;
+                } else if (state == 0 && resolvedState != 1) {
+                    resolvedState = 0;
+                } else if (state == -1 && resolvedState == -2) {
+                    resolvedState = -1;
+                }
+            }
         }
         
-        if (gPerms.contains(permKey)) {
-            QJsonValue val = gPerms.value(permKey);
-            // Suporta tanto bool quanto int para compatibilidade
-            if (val.isBool()) {
-                return val.toBool() ? 1 : 0; // Allow=true, Deny=false
-            } else if (val.isDouble()) {
-                int state = val.toInt();
-                if (state == 1) return 1;   // Allow
-                if (state == 0) return 0;   // Deny
-                if (state == -1) return -1; // Inherit
+        if (ch.groupPositionReqs.contains(gidStr)) {
+            int requiredPos = ch.groupPositionReqs[gidStr].toInt();
+            int clientPos = m_groups.value(gid).position;
+            if (clientPos < requiredPos) {
+                return 0; // Deny - posição insuficiente
             }
         }
     }
     
-    // Verifica posição hierárquica para acessar canal (Pilar 1)
-    // Se houver requisito de position no canal para este grupo, verifica
-    if (ch.groupPositionReqs.contains(gidStr)) {
-        int requiredPos = ch.groupPositionReqs[gidStr].toInt();
-        int clientPos = clientPosition(c);
-        if (clientPos < requiredPos) {
-            return 0; // Deny - posição insuficiente
-        }
-    }
-    
-    return -1; // Inherit - usa permissão do servidor
+    return resolvedState;
 }
 
 // Pilar 3: Verifica permissão efetiva de canal considerando Allow/Deny/Inherit
@@ -251,8 +265,15 @@ bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QSt
 
 int ServerCore::talkPower(const ClientSession* c) const {
     if (!c) return 0;
-    const GroupDef g = m_groups.value(c->groupId(), m_groups.value(1));
-    return g.perms.value(QStringLiteral("talkPower")).toInt();
+    QList<int> gids = m_assignByUid.value(c->uniqueId());
+    if (gids.isEmpty()) gids << 2;
+    int maxPower = 0;
+    for (int gid : gids) {
+        const GroupDef g = m_groups.value(gid, m_groups.value(1));
+        int power = g.perms.value(QStringLiteral("talkPower")).toInt(0);
+        maxPower = qMax(maxPower, power);
+    }
+    return maxPower;
 }
 
 QJsonObject ServerCore::myPermsOf(const GroupDef& g) { return g.perms; }
@@ -276,22 +297,62 @@ QJsonObject ServerCore::groupToJson(const GroupDef& g) const {
 }
 
 void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
-    if (!m_groups.contains(groupId)) groupId = 1;
-    c->setGroupId(groupId);
-    c->setGroup(m_groups[groupId].name);
-    c->setSigla(m_groups[groupId].sigla);
-    c->setIcon(m_groups[groupId].icon);
-    c->setGroupOrder(m_groups[groupId].order);
-    c->setGroupPosition(m_groups[groupId].position);  // Pilar 1: position hierárquico
+    QList<int> gids = m_assignByUid.value(c->uniqueId());
+    if (!gids.contains(groupId) && groupId > 0) {
+        gids << groupId;
+    }
+    if (gids.isEmpty()) {
+        gids << 2; // normal por padrão
+    }
+    
+    QList<int> validIds;
+    for (int gid : gids) {
+        if (m_groups.contains(gid)) {
+            validIds << gid;
+        }
+    }
+    if (validIds.isEmpty()) {
+        validIds << 2;
+    }
+    
+    // Ordena por posição decrescente (maior poder no topo)
+    std::sort(validIds.begin(), validIds.end(), [this](int a, int b) {
+        return m_groups[a].position > m_groups[b].position;
+    });
+    
+    int primaryGid = validIds.first();
+    c->setGroupId(primaryGid);
+    
+    QStringList names;
+    QStringList siglas;
+    int maxPos = 0;
+    int minOrder = 9999;
+    QString firstIcon;
+    
+    for (int gid : validIds) {
+        const GroupDef& g = m_groups[gid];
+        names << g.name;
+        if (!g.sigla.isEmpty()) siglas << g.sigla;
+        maxPos = qMax(maxPos, g.position);
+        minOrder = qMin(minOrder, g.order);
+        if (firstIcon.isEmpty() && !g.icon.isEmpty()) firstIcon = g.icon;
+    }
+    
+    c->setGroup(names.join(QStringLiteral("\n")));
+    c->setSigla(siglas.join(QStringLiteral(" ")));
+    c->setIcon(firstIcon);
+    c->setGroupOrder(minOrder);
+    c->setGroupPosition(maxPos);
+    
     if (announce) {
         QJsonObject m = HProto::msg("user_group");
         m["id"] = c->id();
         m["group"] = c->group();
-        m["gid"] = groupId;
-        m["sigla"] = m_groups[groupId].sigla;
-        m["icon"] = m_groups[groupId].icon;
-        m["order"] = m_groups[groupId].order;
-        m["position"] = m_groups[groupId].position;  // Pilar 1
+        m["gid"] = primaryGid;
+        m["sigla"] = c->sigla();
+        m["icon"] = c->icon();
+        m["order"] = minOrder;
+        m["position"] = maxPos;
         broadcast(m);
     }
 }
@@ -466,7 +527,7 @@ void ServerCore::loadData() {
 
         if (q.exec("SELECT uid, groupId FROM assignments")) {
             while (q.next()) {
-                m_assignByUid[q.value(0).toString()] = q.value(1).toInt();
+                m_assignByUid[q.value(0).toString()] << q.value(1).toInt();
             }
         }
 
@@ -781,8 +842,15 @@ void ServerCore::loadDataFromJson() {
         }
     }
     const QJsonObject assign = root["assignments"].toObject();
-    for (auto it = assign.begin(); it != assign.end(); ++it)
-        m_assignByUid[it.key()] = it.value().toInt();
+    for (auto it = assign.begin(); it != assign.end(); ++it) {
+        if (it.value().isArray()) {
+            for (const QJsonValue& gv : it.value().toArray()) {
+                m_assignByUid[it.key()] << gv.toInt();
+            }
+        } else {
+            m_assignByUid[it.key()] << it.value().toInt();
+        }
+    }
     for (const QJsonValue& v : root["usedKeys"].toArray())
         m_usedKeys.insert(v.toString());
     const QJsonObject clients = root["clients"].toObject();
@@ -930,11 +998,13 @@ void ServerCore::saveDataToSql() {
 
     q.prepare("INSERT INTO assignments (`uid`, `groupId`) VALUES (:uid, :groupId)");
     for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it) {
-        q.bindValue(":uid", it.key());
-        q.bindValue(":groupId", it.value());
-        if (!q.exec()) {
-            log(QStringLiteral("SQL SAVE ERROR on assignments (uid=%1, gid=%2): %3")
-                .arg(it.key()).arg(QString::number(it.value())).arg(q.lastError().text()));
+        for (int gid : it.value()) {
+            q.bindValue(":uid", it.key());
+            q.bindValue(":groupId", gid);
+            if (!q.exec()) {
+                log(QStringLiteral("SQL SAVE ERROR on assignments (uid=%1, gid=%2): %3")
+                    .arg(it.key()).arg(QString::number(gid)).arg(q.lastError().text()));
+            }
         }
     }
 
@@ -1284,7 +1354,8 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     c->setPlatform(obj["platform"].toString().left(20));
 
     // grupo: atribuição persistente por UID tem prioridade; senão "normal"
-    int gid = m_assignByUid.value(uid, 0);
+    QList<int> gids = m_assignByUid.value(uid);
+    int gid = gids.isEmpty() ? 2 : gids.first();
     log(QStringLiteral("DEBUG: Cliente \"%1\" com UID \"%2\" conectando. GID mapeado recuperado: %3")
             .arg(nick, uid, QString::number(gid)));
     if (!m_groups.contains(gid)) gid = 2; // normal
@@ -1971,8 +2042,9 @@ void ServerCore::handleGroupList(ClientSession* c) {
         QJsonArray members;
         for (auto it = m_registry.cbegin(); it != m_registry.cend(); ++it) {
             const QString uid = it.key();
-            const int assigned = m_assignByUid.value(uid, 2);
-            if (assigned != g.id) continue;
+            QList<int> assigned = m_assignByUid.value(uid);
+            bool hasGroup = assigned.contains(g.id) || (assigned.isEmpty() && g.id == 2);
+            if (!hasGroup) continue;
             QJsonObject member;
             member["uid"] = uid;
             member["name"] = it.value().name;
@@ -1980,7 +2052,9 @@ void ServerCore::handleGroupList(ClientSession* c) {
             members << member;
         }
         for (ClientSession* online : m_clients) {
-            if (online->groupId() != g.id) continue;
+            QList<int> assigned = m_assignByUid.value(online->uniqueId());
+            bool hasGroup = assigned.contains(g.id) || (assigned.isEmpty() && g.id == 2);
+            if (!hasGroup) continue;
             bool already = false;
             for (const QJsonValue& v : members)
                 if (v.toObject().value("uid").toString() == online->uniqueId()) already = true;
@@ -2077,10 +2151,18 @@ void ServerCore::handleGroupDelete(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     m_groups.remove(id);
-    for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it)
-        if (it.value() == id) it.value() = 1;
-    for (ClientSession* o : m_clients)
-        if (o->groupId() == id) applyGroup(o, 1, true);
+    for (auto it = m_assignByUid.begin(); it != m_assignByUid.end(); ++it) {
+        it.value().removeAll(id);
+        if (it.value().isEmpty()) {
+            it.value() << 2; // normal por padrão se ficou sem nenhum
+        }
+    }
+    for (ClientSession* o : m_clients) {
+        QList<int> gids = m_assignByUid.value(o->uniqueId());
+        if (gids.contains(id) || o->groupId() == id) {
+            applyGroup(o, 0, true);
+        }
+    }
     saveData();
     broadcastGroups();
 }
@@ -2105,17 +2187,38 @@ void ServerCore::handleClientSetGroup(ClientSession* c, const QJsonObject& obj) 
         if (!m_clients.contains(cid)) return;
         ClientSession* t = m_clients[cid];
         targetUid = t->uniqueId();
-        applyGroup(t, gid, true);
     } else if (m_registry.contains(targetUid)) {
         // offline: só persiste
     } else if (targetUid.isEmpty()) {
         return;
     }
     if (!targetUid.isEmpty()) {
-        m_assignByUid[targetUid] = gid;
+        QList<int>& list = m_assignByUid[targetUid];
+        if (list.contains(gid)) {
+            if (list.size() > 1) {
+                list.removeAll(gid);
+            } else if (gid != 2) {
+                list.clear();
+                list << 2;
+            }
+        } else {
+            // Remove o cargo "normal" se o usuário estiver ganhando outro cargo que não seja ele,
+            // ou apenas adicione. Vamos apenas adicionar para que eles possam ter múltiplos cargos!
+            list << gid;
+        }
+        
+        // Aplica o novo estado ao cliente online se conectado
+        if (obj.contains("id")) {
+            const int cid = obj["id"].toInt();
+            if (m_clients.contains(cid)) {
+                ClientSession* t = m_clients[cid];
+                applyGroup(t, 0, true);
+            }
+        }
+        
         saveData();
-        log(QStringLiteral("%1 atribuiu grupo \"%2\" ao UID %3")
-                .arg(c->name(), m_groups[gid].name, targetUid.left(16)));
+        log(QStringLiteral("%1 alterou cargos do UID %2: %3")
+                .arg(c->name(), targetUid.left(16), QString::number(gid)));
         broadcastGroups();
     }
 }
