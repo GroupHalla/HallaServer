@@ -89,6 +89,12 @@ public:
     void setVersion(const QString& v)       { m_version = v; }
     void setAllowScreenShare(bool on)       { m_allowScreenShare = on; }
     bool allowScreenShare() const           { return m_allowScreenShare; }
+    void setScreenshareWidth(int w)         { m_screenshareWidth = w; }
+    int screenshareWidth() const            { return m_screenshareWidth; }
+    void setScreenshareHeight(int h)        { m_screenshareHeight = h; }
+    int screenshareHeight() const           { return m_screenshareHeight; }
+    void setScreenshareFps(int f)           { m_screenshareFps = f; }
+    int screenshareFps() const              { return m_screenshareFps; }
 
     void log(const QString& msg);
     int clientCount() const { return m_clients.size(); }
@@ -144,7 +150,10 @@ private:
     QString m_adminPassword;
     QMap<QString, QString> m_privKeyGroup; // chave -> nome do grupo concedido
     bool m_privKeyReuse = false;
-    bool m_allowScreenShare = true;
+    bool m_allowScreenShare = false;
+    int m_screenshareWidth = 1280;
+    int m_screenshareHeight = 720;
+    int m_screenshareFps = 12;
     QString m_dataFile;
     QString m_banFile;
     QString m_dbFile;

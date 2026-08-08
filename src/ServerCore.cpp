@@ -1334,24 +1334,6 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
         m["on"] = false;
         broadcast(m);
     }
-    else if (t == "screenshare_frame") {
-        if (!m_allowScreenShare) return;
-        const int chan = channelOfUser(c->id());
-        if (chan == 0 || !m_channels.contains(chan)) return;
-        
-        QJsonObject m = HProto::msg("user_screenshare_frame");
-        m["id"] = c->id();
-        m["data"] = obj["data"].toString();
-        
-        const SvrChan& ch = m_channels[chan];
-        for (int uid : ch.users) {
-            if (uid == c->id()) continue;
-            ClientSession* target = m_clients.value(uid, nullptr);
-            if (target) {
-                target->send(m);
-            }
-        }
-    }
     else if (t == "quit") {
         // desconexão graciosa: notifica os demais antes de fechar
         QJsonObject left = HProto::msg("user_left");
@@ -1421,13 +1403,20 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
-    // apelido duplicado
-    for (ClientSession* other : m_clients)
-        if (other->name().compare(nick, Qt::CaseInsensitive) == 0) {
-            sendError(c, "name_in_use", "Apelido já em uso");
-            c->closeAndDelete();
-            return;
+    // Remove qualquer sessão zumbi/duplicada do mesmo usuário (por apelido ou UID)
+    for (ClientSession* other : m_clients) {
+        if (other->uniqueId() == uid || other->name().compare(nick, Qt::CaseInsensitive) == 0) {
+            log(QStringLiteral("Sessão duplicada/zumbi de %1 (#%2) removida para nova conexão").arg(other->name()).arg(other->id()));
+            
+            QJsonObject kicked = HProto::msg("kicked");
+            kicked["reason"] = "Nova sessão iniciada";
+            kicked["ban"] = false;
+            other->send(kicked);
+            
+            doKick(other, "Nova sessão iniciada", true, false);
+            break;
         }
+    }
 
     c->setId(m_nextId++);
     c->setName(nick);
@@ -1497,6 +1486,9 @@ void ServerCore::sendWelcome(ClientSession* c) {
 #endif
     server["maxClients"] = m_maxClients;
     server["screenshare"] = m_allowScreenShare;
+    server["screenshare_w"] = m_screenshareWidth;
+    server["screenshare_h"] = m_screenshareHeight;
+    server["screenshare_fps"] = m_screenshareFps;
     if (!m_serverBanner.isEmpty())
         server["banner"] = QString::fromLatin1(m_serverBanner.toBase64());
     w["server"] = server;
@@ -2625,8 +2617,6 @@ void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray
 
 void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByteArray& payload) {
     if (!sender || !m_voice || !m_allowScreenShare || payload.isEmpty()) return;
-    const int chan = channelOfUser(sender->id());
-    if (chan == 0 || !m_channels.contains(chan)) return;
 
     QByteArray p;
     p.reserve(10 + payload.size());
@@ -2636,11 +2626,9 @@ void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByt
     p.append(reinterpret_cast<const char*>(&seq), 2);
     p.append(payload);
 
-    const SvrChan& ch = m_channels[chan];
-    for (int uid : ch.users) {
-        if (uid == sender->id()) continue;
-        ClientSession* target = m_clients.value(uid, nullptr);
-        if (target && target->udpPort() > 0) {
+    for (ClientSession* target : m_clients) {
+        if (target == sender) continue;
+        if (target->udpPort() > 0) {
             m_voice->sendTo(target->udpAddress(), target->udpPort(), p);
         }
     }
