@@ -62,12 +62,9 @@ ServerCore::~ServerCore() {
 }
 
 bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
-    if (QFile::exists(QStringLiteral("./libssl.so.3"))) {
-        QFile::remove(QStringLiteral("./libssl.so.3"));
-    }
-    if (QFile::exists(QStringLiteral("./libcrypto.so.3"))) {
-        QFile::remove(QStringLiteral("./libcrypto.so.3"));
-    }
+    // Não remova libssl/libcrypto do diretório da aplicação: em containers
+    // mínimos (Pterodactyl) o pacote da release leva o backend TLS do Qt e as
+    // bibliotecas OpenSSL ao lado do binário para que QSslSocket funcione.
 
     m_controlPort = controlPort;
     loadData();

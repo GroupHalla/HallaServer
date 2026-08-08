@@ -111,12 +111,14 @@ jobs:
         run: |
           mkdir -p halla-server-linux
           mkdir -p halla-server-linux/sqldrivers
+          mkdir -p halla-server-linux/tls
           cp build/halla-server halla-server-linux/
           cp halla-server.ini halla-server-linux/
           
-          # Copia os drivers do banco de dados (SQLite e MySQL) do Qt6
+          # Copia os plugins do Qt necessários em containers mínimos.
           cp /usr/lib/x86_64-linux-gnu/qt6/plugins/sqldrivers/libqsqlite.so halla-server-linux/sqldrivers/
           cp /usr/lib/x86_64-linux-gnu/qt6/plugins/sqldrivers/libqsqlmysql.so halla-server-linux/sqldrivers/
+          cp /usr/lib/x86_64-linux-gnu/qt6/plugins/tls/*.so halla-server-linux/tls/
           
           # Copia as bibliotecas Qt 6 essenciais. QtNetwork do Ubuntu recente
           # depende de libproxy.so.1; containers Pterodactyl mínimos não têm essa
@@ -177,10 +179,12 @@ jobs:
       - name: Prepare ARM64 Package
         run: |
           mkdir -p halla-server-linux-arm64/sqldrivers
+          mkdir -p halla-server-linux-arm64/tls
           cp build/halla-server halla-server-linux-arm64/
           cp halla-server.ini halla-server-linux-arm64/
           cp /usr/lib/aarch64-linux-gnu/qt6/plugins/sqldrivers/libqsqlite.so halla-server-linux-arm64/sqldrivers/
           cp /usr/lib/aarch64-linux-gnu/qt6/plugins/sqldrivers/libqsqlmysql.so halla-server-linux-arm64/sqldrivers/
+          cp /usr/lib/aarch64-linux-gnu/qt6/plugins/tls/*.so halla-server-linux-arm64/tls/
           
           # Copia as bibliotecas Qt 6 essenciais e dependências runtime
           # não básicas necessárias em containers Pterodactyl mínimos.
