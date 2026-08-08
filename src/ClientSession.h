@@ -79,6 +79,14 @@ public:
 
     QDateTime connectedAt() const           { return m_connectedAt; }
 
+    void setPendingIdentity(const QJsonObject& hello, const QByteArray& pub, const QByteArray& nonce) {
+        m_pendingIdentityHello = hello; m_pendingIdentityPub = pub; m_pendingIdentityNonce = nonce;
+    }
+    QJsonObject pendingIdentityHello() const { return m_pendingIdentityHello; }
+    QByteArray pendingIdentityPub() const { return m_pendingIdentityPub; }
+    QByteArray pendingIdentityNonce() const { return m_pendingIdentityNonce; }
+    void clearPendingIdentity() { m_pendingIdentityHello = QJsonObject(); m_pendingIdentityPub.clear(); m_pendingIdentityNonce.clear(); }
+
 signals:
     void messageReceived(ClientSession* client, const QJsonObject& obj);
     void disconnected(ClientSession* client);
@@ -116,4 +124,7 @@ private:
     QSet<int> m_whisperIds;
     QString m_avatarHash;
     QDateTime m_connectedAt = QDateTime::currentDateTime();
+    QJsonObject m_pendingIdentityHello;
+    QByteArray m_pendingIdentityPub;
+    QByteArray m_pendingIdentityNonce;
 };

@@ -17,6 +17,9 @@
 #include <QSslSocket>
 #include <QSslKey>
 #include <QSslCertificate>
+#include <openssl/evp.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
 #include <QProcess>
 #include <algorithm>
 
@@ -46,6 +49,27 @@ private:
     QSslCertificate m_cert;
     QSslKey m_key;
 };
+
+static QString uidForIdentityPublicKey(const QByteArray& publicDer) {
+    return QString::fromLatin1(QCryptographicHash::hash(publicDer, QCryptographicHash::Sha256).toBase64());
+}
+
+static bool verifyIdentitySignature(const QByteArray& publicDer, const QByteArray& nonce, const QByteArray& sig) {
+    if (publicDer.isEmpty() || nonce.isEmpty() || sig.isEmpty()) return false;
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(publicDer.constData());
+    EVP_PKEY* key = d2i_PUBKEY(nullptr, &p, publicDer.size());
+    if (!key) return false;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    bool ok = false;
+    if (ctx && EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, key) == 1) {
+        ok = EVP_DigestVerify(ctx,
+                              reinterpret_cast<const unsigned char*>(sig.constData()), sig.size(),
+                              reinterpret_cast<const unsigned char*>(nonce.constData()), nonce.size()) == 1;
+    }
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(key);
+    return ok;
+}
 
 ServerCore::ServerCore(QObject* parent) : QObject(parent) {
     m_nextToken = 1024;
@@ -1324,6 +1348,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
+    if (c->id() == 0 && t == "identity_proof") { handleIdentityProof(c, obj); return; }
     if (c->id() == 0 && t != "hello") return; // exige login antes de tudo
 
     if (t == "hello")           handleHello(c, obj);
@@ -1408,11 +1433,28 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     }
 }
 
+void ServerCore::handleIdentityProof(ClientSession* c, const QJsonObject& obj) {
+    if (!c || c->id() != 0) return;
+    const QByteArray sig = QByteArray::fromBase64(obj["sig"].toString().toLatin1());
+    const QByteArray pub = c->pendingIdentityPub();
+    const QByteArray nonce = c->pendingIdentityNonce();
+    if (!verifyIdentitySignature(pub, nonce, sig)) {
+        sendError(c, "bad_identity", "Assinatura da identidade inválida");
+        c->closeAndDelete();
+        return;
+    }
+    QJsonObject hello = c->pendingIdentityHello();
+    hello["identityVerified"] = true;
+    hello["uid"] = uidForIdentityPublicKey(pub);
+    c->clearPendingIdentity();
+    handleHello(c, hello);
+}
+
 void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     if (c->id() != 0) return; // já logado
 
     const QString nick = obj["nick"].toString().trimmed().left(30);
-    const QString uid = obj["uid"].toString().left(64);
+    QString uid = obj["uid"].toString().left(64);
     const QString pass = obj["pass"].toString();
     const QString adminPass = obj["adminPass"].toString();
     const int clientProto = obj["proto"].toInt();
@@ -1429,6 +1471,24 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
         c->closeAndDelete();
         return;
     }
+
+    if (!obj["identityVerified"].toBool(false)) {
+        const QByteArray pub = QByteArray::fromBase64(obj["idPub"].toString().toLatin1());
+        if (pub.isEmpty()) {
+            sendError(c, "bad_identity", "Identidade criptográfica ausente — atualize o cliente");
+            c->closeAndDelete();
+            return;
+        }
+        QByteArray nonce(32, '\0');
+        QRandomGenerator* rng = QRandomGenerator::system();
+        for (int i = 0; i < nonce.size(); ++i) nonce[i] = char(rng->bounded(256));
+        c->setPendingIdentity(obj, pub, nonce);
+        QJsonObject challenge = HProto::msg("identity_challenge");
+        challenge["nonce"] = QString::fromLatin1(nonce.toBase64());
+        c->send(challenge);
+        return;
+    }
+
     if (uid.isEmpty()) {
         sendError(c, "bad_uid", "Identidade (ID único) ausente — atualize o cliente");
         c->closeAndDelete();

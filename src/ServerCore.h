@@ -236,6 +236,7 @@ private:
     void saveBans();
 
     void handleHello(ClientSession* c, const QJsonObject& obj);
+    void handleIdentityProof(ClientSession* c, const QJsonObject& obj);
     void handleChat(ClientSession* c, const QJsonObject& obj);
     void handleMove(ClientSession* c, const QJsonObject& obj);
     void handleMoveOther(ClientSession* c, const QJsonObject& obj);

@@ -1,12 +1,13 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(HallaServer VERSION 1.1.23 LANGUAGES CXX)
+project(HallaServer VERSION 1.1.24 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 6.2 QUIET COMPONENTS Core Network Sql)
+find_package(OpenSSL REQUIRED)
 if (Qt6_FOUND)
     set(QT_LIBS Qt6::Core Qt6::Network Qt6::Sql)
 else()
@@ -23,7 +24,7 @@ add_executable(halla-server
     src/VoiceRelay.cpp
 )
 target_include_directories(halla-server PRIVATE src shared)
-target_link_libraries(halla-server PRIVATE ${QT_LIBS})
+target_link_libraries(halla-server PRIVATE ${QT_LIBS} OpenSSL::Crypto)
 
 # --- ferramenta de teste de protocolo (CLI) ---
 add_executable(halla-nettest tools/nettest.cpp)

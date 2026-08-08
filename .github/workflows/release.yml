@@ -29,6 +29,7 @@ jobs:
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-qt6-base
+            mingw-w64-x86_64-openssl
 
       - name: Configure CMake
         shell: msys2 {0}
@@ -97,7 +98,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools build-essential libqt6sql6-sqlite libqt6sql6-mysql
+          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools build-essential libssl-dev libqt6sql6-sqlite libqt6sql6-mysql
 
       - name: Configure CMake
         run: |
@@ -171,7 +172,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools build-essential libqt6sql6-sqlite libqt6sql6-mysql
+          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools build-essential libssl-dev libqt6sql6-sqlite libqt6sql6-mysql
       - name: Configure and Build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -276,8 +277,8 @@ jobs:
             ## Halla Server ${{ github.ref_name }}
 
             ### Novidades
-            * Canal de controle protegido por TLS com certificado autoassinado na primeira execução ou certificado próprio via INI.
-            * Distribuição de chaves de voz por canal pelo canal TLS, com rotação ao entrar/sair e suporte a canais vinculados.
-            * Correção dos comandos avançados do ServerQuery para posição hierárquica e overrides de permissões por canal.
+            * Identidade criptográfica Ed25519: UID derivado do hash da chave pública.
+            * Login com desafio assinado: o cliente prova posse da chave privada antes de herdar grupos/cargos ou bans por UID.
+            * Mantém TLS no controle e chaves de voz por canal, com empacotamento Linux compatível com Pterodactyl.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
