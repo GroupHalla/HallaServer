@@ -118,25 +118,11 @@ jobs:
           cp /usr/lib/x86_64-linux-gnu/qt6/plugins/sqldrivers/libqsqlite.so halla-server-linux/sqldrivers/
           cp /usr/lib/x86_64-linux-gnu/qt6/plugins/sqldrivers/libqsqlmysql.so halla-server-linux/sqldrivers/
           
-          # Resolvendo recursivamente dependências de TODAS as bibliotecas dinâmicas do Linux (.so) necessárias!
-          echo ">> Resolvendo e copiando dependências de .so do sistema de forma abrangente..."
-          COPIED=true
-          while [ "$COPIED" = true ]; do
-            COPIED=false
-            for f in $(find halla-server-linux -type f \( -executable -o -name "*.so*" \)); do
-              # Filtra fora apenas bibliotecas de núcleo absoluto do kernel/glibc que devem vir do sistema operacional host
-              for dep in $(ldd "$f" | grep -v -E "libc\.so|libm\.so|libpthread|libdl\.so|librt\.so|linux-vdso|ld-linux|libresolv\.so|libssl\.so|libcrypto\.so" | awk '{print $3}'); do
-                if [ ! -z "$dep" ] && [ -f "$dep" ]; then
-                  dep_name=$(basename "$dep")
-                  if [ ! -f "halla-server-linux/$dep_name" ] && [ ! -f "halla-server-linux/sqldrivers/$dep_name" ]; then
-                    echo "Copiando biblioteca de dependência: $dep_name de $dep"
-                    cp "$dep" halla-server-linux/
-                    COPIED=true
-                  fi
-                fi
-              done
-            done
-          done
+          # Copia SOMENTE as bibliotecas do Qt 6 (essenciais, pois containers nao as possuem!)
+          # e nao copia mais nenhuma outra biblioteca do sistema para evitar conflitos!
+          cp /usr/lib/x86_64-linux-gnu/libQt6Core.so.6 halla-server-linux/
+          cp /usr/lib/x86_64-linux-gnu/libQt6Network.so.6 halla-server-linux/
+          cp /usr/lib/x86_64-linux-gnu/libQt6Sql.so.6 halla-server-linux/
           
           tar -czf halla-server-${{ github.ref_name }}-linux-x64.tar.gz halla-server-linux/
 
@@ -167,15 +153,12 @@ jobs:
           cp halla-server.ini halla-server-linux-arm64/
           cp /usr/lib/aarch64-linux-gnu/qt6/plugins/sqldrivers/libqsqlite.so halla-server-linux-arm64/sqldrivers/
           cp /usr/lib/aarch64-linux-gnu/qt6/plugins/sqldrivers/libqsqlmysql.so halla-server-linux-arm64/sqldrivers/
-          # Copia dependências não pertencentes à glibc do binário e drivers.
-          for f in $(find halla-server-linux-arm64 -type f \( -executable -o -name "*.so*" \)); do
-            ldd "$f" | awk '{print $3}' | while read dep; do
-              case "$(basename "$dep")" in
-                libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|ld-linux-*.so.*|libssl.so.*|libcrypto.so.*) continue ;;
-              esac
-              if [ -n "$dep" ] && [ -f "$dep" ]; then cp -n "$dep" halla-server-linux-arm64/ || true; fi
-            done
-          done
+          
+          # Copia SOMENTE as bibliotecas essenciais do Qt6
+          cp /usr/lib/aarch64-linux-gnu/libQt6Core.so.6 halla-server-linux-arm64/
+          cp /usr/lib/aarch64-linux-gnu/libQt6Network.so.6 halla-server-linux-arm64/
+          cp /usr/lib/aarch64-linux-gnu/libQt6Sql.so.6 halla-server-linux-arm64/
+          
           tar -czf halla-server-${{ github.ref_name }}-linux-arm64.tar.gz halla-server-linux-arm64/
       - name: Upload ARM64 Artifact
         uses: actions/upload-artifact@v4
