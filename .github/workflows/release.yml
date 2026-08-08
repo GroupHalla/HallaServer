@@ -118,11 +118,39 @@ jobs:
           cp /usr/lib/x86_64-linux-gnu/qt6/plugins/sqldrivers/libqsqlite.so halla-server-linux/sqldrivers/
           cp /usr/lib/x86_64-linux-gnu/qt6/plugins/sqldrivers/libqsqlmysql.so halla-server-linux/sqldrivers/
           
-          # Copia SOMENTE as bibliotecas do Qt 6 (essenciais, pois containers nao as possuem!)
-          # e nao copia mais nenhuma outra biblioteca do sistema para evitar conflitos!
+          # Copia as bibliotecas Qt 6 essenciais. QtNetwork do Ubuntu recente
+          # depende de libproxy.so.1; containers Pterodactyl mínimos não têm essa
+          # biblioteca. Por isso resolvemos recursivamente as dependências não
+          # básicas dos binários/libs empacotados, sem copiar glibc/loader.
           cp /usr/lib/x86_64-linux-gnu/libQt6Core.so.6 halla-server-linux/
           cp /usr/lib/x86_64-linux-gnu/libQt6Network.so.6 halla-server-linux/
           cp /usr/lib/x86_64-linux-gnu/libQt6Sql.so.6 halla-server-linux/
+
+          copy_runtime_deps() {
+            local root="$1"
+            local changed=1
+            while [ "$changed" -eq 1 ]; do
+              changed=0
+              while IFS= read -r f; do
+                while IFS= read -r dep; do
+                  [ -n "$dep" ] || continue
+                  [ -f "$dep" ] || continue
+                  local base
+                  base="$(basename "$dep")"
+                  case "$base" in
+                    linux-vdso*|ld-linux*|libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libresolv.so.*)
+                      continue ;;
+                  esac
+                  if [ ! -f "$root/$base" ]; then
+                    echo "Copiando dependência runtime: $base"
+                    cp -L "$dep" "$root/$base"
+                    changed=1
+                  fi
+                done < <(ldd "$f" 2>/dev/null | awk '/=> \/.*\// {print $3} /^[[:space:]]*\// {print $1}')
+              done < <(find "$root" -maxdepth 2 -type f)
+            done
+          }
+          copy_runtime_deps halla-server-linux
           
           tar -czf halla-server-${{ github.ref_name }}-linux-x64.tar.gz halla-server-linux/
 
@@ -154,10 +182,37 @@ jobs:
           cp /usr/lib/aarch64-linux-gnu/qt6/plugins/sqldrivers/libqsqlite.so halla-server-linux-arm64/sqldrivers/
           cp /usr/lib/aarch64-linux-gnu/qt6/plugins/sqldrivers/libqsqlmysql.so halla-server-linux-arm64/sqldrivers/
           
-          # Copia SOMENTE as bibliotecas essenciais do Qt6
+          # Copia as bibliotecas Qt 6 essenciais e dependências runtime
+          # não básicas necessárias em containers Pterodactyl mínimos.
           cp /usr/lib/aarch64-linux-gnu/libQt6Core.so.6 halla-server-linux-arm64/
           cp /usr/lib/aarch64-linux-gnu/libQt6Network.so.6 halla-server-linux-arm64/
           cp /usr/lib/aarch64-linux-gnu/libQt6Sql.so.6 halla-server-linux-arm64/
+
+          copy_runtime_deps() {
+            local root="$1"
+            local changed=1
+            while [ "$changed" -eq 1 ]; do
+              changed=0
+              while IFS= read -r f; do
+                while IFS= read -r dep; do
+                  [ -n "$dep" ] || continue
+                  [ -f "$dep" ] || continue
+                  local base
+                  base="$(basename "$dep")"
+                  case "$base" in
+                    linux-vdso*|ld-linux*|libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libresolv.so.*)
+                      continue ;;
+                  esac
+                  if [ ! -f "$root/$base" ]; then
+                    echo "Copiando dependência runtime: $base"
+                    cp -L "$dep" "$root/$base"
+                    changed=1
+                  fi
+                done < <(ldd "$f" 2>/dev/null | awk '/=> \/.*\// {print $3} /^[[:space:]]*\// {print $1}')
+              done < <(find "$root" -maxdepth 2 -type f)
+            done
+          }
+          copy_runtime_deps halla-server-linux-arm64
           
           tar -czf halla-server-${{ github.ref_name }}-linux-arm64.tar.gz halla-server-linux-arm64/
       - name: Upload ARM64 Artifact
