@@ -125,7 +125,7 @@ jobs:
             COPIED=false
             for f in $(find halla-server-linux -type f \( -executable -o -name "*.so*" \)); do
               # Filtra fora apenas bibliotecas de núcleo absoluto do kernel/glibc que devem vir do sistema operacional host
-              for dep in $(ldd "$f" | grep -v -E "libc\.so|libm\.so|libpthread|libdl\.so|librt\.so|linux-vdso|ld-linux|libresolv\.so" | awk '{print $3}'); do
+              for dep in $(ldd "$f" | grep -v -E "libc\.so|libm\.so|libpthread|libdl\.so|librt\.so|linux-vdso|ld-linux|libresolv\.so|libssl\.so|libcrypto\.so" | awk '{print $3}'); do
                 if [ ! -z "$dep" ] && [ -f "$dep" ]; then
                   dep_name=$(basename "$dep")
                   if [ ! -f "halla-server-linux/$dep_name" ] && [ ! -f "halla-server-linux/sqldrivers/$dep_name" ]; then
@@ -171,7 +171,7 @@ jobs:
           for f in $(find halla-server-linux-arm64 -type f \( -executable -o -name "*.so*" \)); do
             ldd "$f" | awk '{print $3}' | while read dep; do
               case "$(basename "$dep")" in
-                libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|ld-linux-*.so.*) continue ;;
+                libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|ld-linux-*.so.*|libssl.so.*|libcrypto.so.*) continue ;;
               esac
               if [ -n "$dep" ] && [ -f "$dep" ]; then cp -n "$dep" halla-server-linux-arm64/ || true; fi
             done
