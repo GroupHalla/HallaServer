@@ -349,7 +349,8 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     
     for (int gid : validIds) {
         const GroupDef& g = m_groups[gid];
-        names << g.name;
+        QString nameWithIcon = g.icon.isEmpty() ? g.name : g.icon + QStringLiteral(" ") + g.name;
+        names << nameWithIcon;
         if (!g.sigla.isEmpty()) siglas << g.sigla;
         maxPos = qMax(maxPos, g.position);
         minOrder = qMin(minOrder, g.order);
