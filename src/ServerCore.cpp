@@ -711,6 +711,33 @@ bool ServerCore::initDatabase() {
            "`groupId` INT"
            ")");
            
+    // Migração dinâmica dialeto-agnóstica de assignments para chave primária composta (suporte a múltiplos cargos)
+    bool needsMigration = true;
+    if (q.exec("INSERT INTO assignments (uid, groupId) VALUES ('test_migration_uid', 9999)")) {
+        if (q.exec("INSERT INTO assignments (uid, groupId) VALUES ('test_migration_uid', 9998)")) {
+            needsMigration = false;
+        }
+        q.exec("DELETE FROM assignments WHERE uid = 'test_migration_uid'");
+    }
+    if (needsMigration) {
+        log("Iniciando migração da tabela assignments para chave composta...");
+        q.exec("CREATE TABLE IF NOT EXISTS assignments_v2 ("
+               "`uid` VARCHAR(255), "
+               "`groupId` INT, "
+               "PRIMARY KEY (`uid`, `groupId`)"
+               ")");
+        q.exec("INSERT INTO assignments_v2 (uid, groupId) SELECT uid, groupId FROM assignments");
+        q.exec("DROP TABLE assignments");
+        q.exec("CREATE TABLE assignments ("
+               "`uid` VARCHAR(255), "
+               "`groupId` INT, "
+               "PRIMARY KEY (`uid`, `groupId`)"
+               ")");
+        q.exec("INSERT INTO assignments (uid, groupId) SELECT uid, groupId FROM assignments_v2");
+        q.exec("DROP TABLE assignments_v2");
+        log("Migração de assignments concluída com sucesso!");
+    }
+           
     q.exec("CREATE TABLE IF NOT EXISTS used_keys ("
            "`key_val` VARCHAR(255) PRIMARY KEY"
            ")");
