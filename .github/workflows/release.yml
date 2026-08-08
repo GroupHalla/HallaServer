@@ -8,7 +8,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-windows:
@@ -230,6 +230,8 @@ jobs:
     name: Create GitHub Release
     needs: [build-windows, build-linux, build-linux-arm64]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download Windows Artifact
         uses: actions/download-artifact@v4
@@ -277,8 +279,8 @@ jobs:
             ## Halla Server ${{ github.ref_name }}
 
             ### Novidades
-            * Identidade criptográfica Ed25519: UID derivado do hash da chave pública.
-            * Login com desafio assinado: o cliente prova posse da chave privada antes de herdar grupos/cargos ou bans por UID.
-            * Mantém TLS no controle e chaves de voz por canal, com empacotamento Linux compatível com Pterodactyl.
+            * Proteções anti-abuso: limite de 2 MiB por mensagem TCP, limite por IP, timeout de conexão ociosa e limpeza de endpoint UDP.
+            * Rate limit por tipo de mensagem, incluindo server_probe, chat, movimento, status, ping e transferência de arquivos.
+            * Validação mais estrita de nick, chat, descrições, tópicos e campos de canais.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

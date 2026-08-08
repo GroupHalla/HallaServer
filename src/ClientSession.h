@@ -6,6 +6,7 @@
 #include <QHostAddress>
 #include <QDateTime>
 #include <QSet>
+#include <QMap>
 
 class ServerCore;
 
@@ -65,8 +66,9 @@ public:
     void setCommander(bool v)               { m_commander = v; }
     void setTalking(bool v)                 { m_talking = v; }
     void setUdpEndpoint(const QHostAddress& addr, quint16 port) {
-        m_udpAddr = addr; m_udpPort = port;
+        m_udpAddr = addr; m_udpPort = port; m_lastUdpSeen = QDateTime::currentDateTimeUtc();
     }
+    void clearUdpEndpoint() { m_udpAddr = QHostAddress(); m_udpPort = 0; }
     void setVoiceToken(quint32 token)       { m_voiceToken = token; }
     quint32 voiceToken() const              { return m_voiceToken; }
 
@@ -78,6 +80,9 @@ public:
     void setAvatarHash(const QString& h)    { m_avatarHash = h; }
 
     QDateTime connectedAt() const           { return m_connectedAt; }
+    QDateTime lastActivityAt() const        { return m_lastActivity; }
+    QDateTime lastUdpSeenAt() const         { return m_lastUdpSeen; }
+    bool allowRate(const QString& type, int maxEvents, int windowMs);
 
     void setPendingIdentity(const QJsonObject& hello, const QByteArray& pub, const QByteArray& nonce) {
         m_pendingIdentityHello = hello; m_pendingIdentityPub = pub; m_pendingIdentityNonce = nonce;
@@ -124,6 +129,9 @@ private:
     QSet<int> m_whisperIds;
     QString m_avatarHash;
     QDateTime m_connectedAt = QDateTime::currentDateTime();
+    QDateTime m_lastActivity = QDateTime::currentDateTimeUtc();
+    QDateTime m_lastUdpSeen;
+    QMap<QString, QList<qint64>> m_rateBuckets;
     QJsonObject m_pendingIdentityHello;
     QByteArray m_pendingIdentityPub;
     QByteArray m_pendingIdentityNonce;

@@ -2,6 +2,7 @@
 #include "ServerCore.h"
 
 #include <QJsonDocument>
+#include <QDateTime>
 
 ClientSession::ClientSession(QTcpSocket* socket, ServerCore* core, QObject* parent)
     : QObject(parent), m_socket(socket), m_core(core) {
@@ -12,11 +13,31 @@ ClientSession::ClientSession(QTcpSocket* socket, ServerCore* core, QObject* pare
 }
 
 void ClientSession::onReadyRead() {
+    static constexpr int kMaxTcpMessageBytes = 2 * 1024 * 1024;
+    m_lastActivity = QDateTime::currentDateTimeUtc();
     m_buffer += m_socket->readAll();
+    if (m_buffer.size() > kMaxTcpMessageBytes) {
+        QJsonObject e;
+        e["t"] = "error";
+        e["code"] = "message_too_big";
+        e["msg"] = "Mensagem TCP excede 2 MiB";
+        send(e);
+        closeAndDelete();
+        return;
+    }
     int idx;
     while ((idx = m_buffer.indexOf('\n')) >= 0) {
         QByteArray line = m_buffer.left(idx).trimmed();
         m_buffer = m_buffer.mid(idx + 1);
+        if (line.size() > kMaxTcpMessageBytes) {
+            QJsonObject e;
+            e["t"] = "error";
+            e["code"] = "message_too_big";
+            e["msg"] = "Mensagem TCP excede 2 MiB";
+            send(e);
+            closeAndDelete();
+            return;
+        }
         if (line.isEmpty()) continue;
         QJsonParseError err;
         QJsonDocument doc = QJsonDocument::fromJson(line, &err);
@@ -34,6 +55,17 @@ void ClientSession::onReadyRead() {
 
 void ClientSession::onDisconnected() {
     emit disconnected(this);
+}
+
+bool ClientSession::allowRate(const QString& type, int maxEvents, int windowMs) {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QList<qint64>& bucket = m_rateBuckets[type];
+    for (int i = bucket.size() - 1; i >= 0; --i) {
+        if (now - bucket[i] > windowMs) bucket.removeAt(i);
+    }
+    if (bucket.size() >= maxEvents) return false;
+    bucket << now;
+    return true;
 }
 
 QHostAddress ClientSession::ip() const {

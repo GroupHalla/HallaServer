@@ -71,6 +71,58 @@ static bool verifyIdentitySignature(const QByteArray& publicDer, const QByteArra
     return ok;
 }
 
+static QHostAddress normalizedAddress(QHostAddress a) {
+    if (a.protocol() == QAbstractSocket::IPv6Protocol) {
+        bool ok = false;
+        const QHostAddress v4(a.toIPv4Address(&ok));
+        if (ok) return v4;
+    }
+    return a;
+}
+
+static bool allowStaticRate(QMap<QString, QList<qint64>>& buckets, const QString& key,
+                            int maxEvents, int windowMs) {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QList<qint64>& bucket = buckets[key];
+    for (int i = bucket.size() - 1; i >= 0; --i)
+        if (now - bucket[i] > windowMs) bucket.removeAt(i);
+    if (bucket.size() >= maxEvents) return false;
+    bucket << now;
+    return true;
+}
+
+static bool containsBadControl(const QString& s, bool allowNewline = false) {
+    for (QChar ch : s) {
+        const ushort u = ch.unicode();
+        if (u < 0x20) {
+            if (allowNewline && (ch == QLatin1Char('\n') || ch == QLatin1Char('\r') || ch == QLatin1Char('\t')))
+                continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool validHumanText(const QString& s, int maxLen, bool allowNewline = false) {
+    return !s.trimmed().isEmpty() && s.size() <= maxLen && !containsBadControl(s, allowNewline);
+}
+
+static bool validOptionalText(const QString& s, int maxLen, bool allowNewline = false) {
+    return s.size() <= maxLen && !containsBadControl(s, allowNewline);
+}
+
+static void messageRateLimitFor(const QString& type, int& maxEvents, int& windowMs) {
+    windowMs = 10'000;
+    maxEvents = 60;
+    if (type == QLatin1String("chat")) { maxEvents = 20; return; }
+    if (type == QLatin1String("move") || type == QLatin1String("move_other")) { maxEvents = 15; return; }
+    if (type == QLatin1String("talking")) { maxEvents = 40; return; }
+    if (type == QLatin1String("status") || type == QLatin1String("ping")) { maxEvents = 30; return; }
+    if (type.startsWith(QLatin1String("ft_"))) { maxEvents = 8; windowMs = 60'000; return; }
+    if (type == QLatin1String("identity_proof")) { maxEvents = 5; windowMs = 15'000; return; }
+    if (type == QLatin1String("server_probe")) { maxEvents = 6; windowMs = 60'000; return; }
+}
+
 ServerCore::ServerCore(QObject* parent) : QObject(parent) {
     m_nextToken = 1024;
     m_idleTimer = new QTimer(this);
@@ -1268,8 +1320,20 @@ void ServerCore::setPrivilegeKeys(const QStringList& keys) {
 
 // ==================================================================== conexões
 void ServerCore::onNewConnection() {
+    static constexpr int kMaxConnectionsPerIp = 8;
     while (m_tcp->hasPendingConnections()) {
         QTcpSocket* s = m_tcp->nextPendingConnection();
+        const QHostAddress ip = normalizedAddress(s->peerAddress());
+        int fromIp = 0;
+        for (ClientSession* existing : findChildren<ClientSession*>()) {
+            if (existing && existing->ip() == ip) ++fromIp;
+        }
+        if (fromIp >= kMaxConnectionsPerIp) {
+            log(QStringLiteral("Conexão recusada de %1: limite por IP excedido").arg(ip.toString()));
+            s->disconnectFromHost();
+            s->deleteLater();
+            continue;
+        }
         ClientSession* c = new ClientSession(s, this, this);
         connect(c, &ClientSession::messageReceived, this, &ServerCore::onClientMessage);
         connect(c, &ClientSession::disconnected, this, &ServerCore::onClientDisconnected);
@@ -1293,6 +1357,21 @@ void ServerCore::onClientDisconnected(ClientSession* client) {
 }
 
 void ServerCore::checkIdleClients() {
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    for (ClientSession* c : findChildren<ClientSession*>()) {
+        if (!c) continue;
+        const qint64 idleMs = c->lastActivityAt().msecsTo(now);
+        if ((c->id() == 0 && idleMs > 15'000) || (c->id() > 0 && idleMs > 5 * 60'000)) {
+            log(QStringLiteral("Fechando conexão ociosa de %1").arg(c->ip().toString()));
+            c->closeAndDelete();
+            continue;
+        }
+        if (c->udpPort() != 0 && c->lastUdpSeenAt().isValid()
+                && c->lastUdpSeenAt().msecsTo(now) > 2 * 60'000) {
+            c->clearUdpEndpoint();
+        }
+    }
+
     // limpa canais temporários vazios
     QList<int> toRemove;
     for (const SvrChan& c : m_channels)
@@ -1329,11 +1408,21 @@ void ServerCore::registerClient(ClientSession* c) {
 // ==================================================================== mensagens
 void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     const QString t = obj["t"].toString();
+    if (t.isEmpty() || t.size() > 40 || containsBadControl(t)) {
+        sendError(c, "bad_type", "Tipo de mensagem inválido");
+        return;
+    }
 
     // Consulta leve usada pela tela inicial do Mobile. Não cria uma sessão,
     // não consome vaga e permite mostrar o limite configurado no servidor
     // antes de o usuário tocar no cartão para entrar.
     if (c->id() == 0 && t == "server_probe") {
+        static QMap<QString, QList<qint64>> probeBuckets;
+        if (!allowStaticRate(probeBuckets, c->ip().toString(), 6, 60'000)) {
+            sendError(c, "rate_limited", "Muitas consultas server_probe deste IP");
+            c->closeAndDelete();
+            return;
+        }
         QJsonObject response = HProto::msg("server_probe");
         QJsonObject server;
         server["name"] = m_name;
@@ -1345,6 +1434,13 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
         response["maxClients"] = m_maxClients;
         c->send(response);
         c->closeAndDelete();
+        return;
+    }
+
+    int maxEvents = 0, windowMs = 0;
+    messageRateLimitFor(t, maxEvents, windowMs);
+    if (maxEvents > 0 && !c->allowRate(t, maxEvents, windowMs)) {
+        sendError(c, "rate_limited", "Você está enviando mensagens rápido demais");
         return;
     }
 
@@ -1466,7 +1562,7 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
         c->closeAndDelete();
         return;
     }
-    if (nick.isEmpty()) {
+    if (!validHumanText(nick, 30, false)) {
         sendError(c, "bad_nick", "Apelido inválido");
         c->closeAndDelete();
         return;
@@ -1675,8 +1771,12 @@ void ServerCore::sendWelcome(ClientSession* c) {
 
 void ServerCore::handleChat(ClientSession* c, const QJsonObject& obj) {
     const QString scope = obj["scope"].toString();
-    const QString text = obj["text"].toString().left(1024);
-    if (text.trimmed().isEmpty()) return;
+    const QString text = obj["text"].toString();
+    if (scope != QLatin1String("server") && scope != QLatin1String("channel") && scope != QLatin1String("private")) {
+        sendError(c, "bad_scope", "Escopo de chat inválido");
+        return;
+    }
+    if (!validHumanText(text, 1024, true)) return;
     if (scope == "private" && !hasPerm(c, "privmsg")) {
         sendError(c, "no_permission", "Sem permissão para mensagens privadas");
         return;
@@ -1854,8 +1954,9 @@ void ServerCore::handleStatus(ClientSession* c, const QJsonObject& obj) {
 }
 
 void ServerCore::handleNick(ClientSession* c, const QJsonObject& obj) {
-    const QString name = obj["name"].toString().trimmed().left(30);
-    if (name.isEmpty() || name == c->name()) return;
+    const QString name = obj["name"].toString().trimmed();
+    if (!validHumanText(name, 30, false)) { sendError(c, "bad_nick", "Apelido inválido"); return; }
+    if (name == c->name()) return;
     for (ClientSession* other : m_clients)
         if (other != c && other->name().compare(name, Qt::CaseInsensitive) == 0) {
             sendError(c, "name_in_use", "Apelido já em uso");
@@ -1871,7 +1972,9 @@ void ServerCore::handleNick(ClientSession* c, const QJsonObject& obj) {
 }
 
 void ServerCore::handleDesc(ClientSession* c, const QJsonObject& obj) {
-    c->setDescription(obj["text"].toString().left(200));
+    const QString text = obj["text"].toString();
+    if (!validOptionalText(text, 200, true)) { sendError(c, "bad_text", "Descrição inválida"); return; }
+    c->setDescription(text);
     QJsonObject m = HProto::msg("user_desc");
     m["id"] = c->id();
     m["text"] = c->description();
@@ -1885,10 +1988,12 @@ void ServerCore::handlePoke(ClientSession* c, const QJsonObject& obj) {
     }
     const int to = obj["to"].toInt();
     if (!m_clients.contains(to)) return;
+    const QString pokeMsg = obj["msg"].toString();
+    if (!validOptionalText(pokeMsg, 100, false)) { sendError(c, "bad_text", "Mensagem inválida"); return; }
     QJsonObject m = HProto::msg("poke");
     m["from"] = c->id();
     m["fromName"] = c->name();
-    m["msg"] = obj["msg"].toString().left(100);
+    m["msg"] = pokeMsg;
     m_clients[to]->send(m);
     c->send(m); // eco
 }
@@ -1909,10 +2014,10 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
-    const QString name = obj["name"].toString().left(255);
+    const QString name = obj["name"].toString();
     // Aceita espaços iniciais/finais decorativos, mas rejeita nome composto
     // somente de espaço.
-    if (name.trimmed().isEmpty()) return;
+    if (!validHumanText(name, 80, false)) { sendError(c, "bad_channel_name", "Nome de canal inválido"); return; }
 
     SvrChan ch;
     ch.id = m_nextChanId++;
@@ -1935,9 +2040,15 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
         for (const SvrChan& sibling : m_channels)
             if (sibling.parent == ch.parent) ch.order = qMax(ch.order, sibling.order + 10);
     }
-    ch.topic = obj["topic"].toString().left(80);
+    ch.topic = obj["topic"].toString();
     ch.desc = obj["desc"].toString();
     ch.password = obj["pass"].toString();
+    if (!validOptionalText(ch.topic, 80, false)
+            || !validOptionalText(ch.desc, 4096, true)
+            || !validOptionalText(ch.password, 128, false)) {
+        sendError(c, "bad_channel_fields", "Campos do canal inválidos");
+        return;
+    }
     ch.def = false;
     ch.moderated = obj["moderated"].toBool(false);
     ch.ntalk = qBound(0, obj["ntalk"].toInt(0), 100);
@@ -2088,11 +2199,27 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     SvrChan& ch = m_channels[id];
-    if (obj.contains("name") && !obj["name"].toString().trimmed().isEmpty()) ch.name = obj["name"].toString().left(255);
+    if (obj.contains("name")) {
+        const QString name = obj["name"].toString();
+        if (!validHumanText(name, 80, false)) { sendError(c, "bad_channel_name", "Nome de canal inválido"); return; }
+        ch.name = name;
+    }
     if (obj.contains("noSymbol")) ch.noSymbol = obj["noSymbol"].toBool();
-    if (obj.contains("topic")) ch.topic = obj["topic"].toString().left(80);
-    if (obj.contains("desc")) ch.desc = obj["desc"].toString();
-    if (obj.contains("pass")) ch.password = obj["pass"].toString();
+    if (obj.contains("topic")) {
+        const QString topic = obj["topic"].toString();
+        if (!validOptionalText(topic, 80, false)) { sendError(c, "bad_channel_fields", "Tópico inválido"); return; }
+        ch.topic = topic;
+    }
+    if (obj.contains("desc")) {
+        const QString desc = obj["desc"].toString();
+        if (!validOptionalText(desc, 4096, true)) { sendError(c, "bad_channel_fields", "Descrição de canal inválida"); return; }
+        ch.desc = desc;
+    }
+    if (obj.contains("pass")) {
+        const QString pass = obj["pass"].toString();
+        if (!validOptionalText(pass, 128, false)) { sendError(c, "bad_channel_fields", "Senha de canal inválida"); return; }
+        ch.password = pass;
+    }
     if (obj.contains("moderated")) ch.moderated = obj["moderated"].toBool();
     if (obj.contains("ntalk")) ch.ntalk = qBound(0, obj["ntalk"].toInt(), 100);
     if (obj.contains("type") && id != 1) ch.type = obj["type"].toInt();
