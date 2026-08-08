@@ -62,6 +62,13 @@ ServerCore::~ServerCore() {
 }
 
 bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
+    if (QFile::exists(QStringLiteral("./libssl.so.3"))) {
+        QFile::remove(QStringLiteral("./libssl.so.3"));
+    }
+    if (QFile::exists(QStringLiteral("./libcrypto.so.3"))) {
+        QFile::remove(QStringLiteral("./libcrypto.so.3"));
+    }
+
     m_controlPort = controlPort;
     loadData();
     loadBans();
