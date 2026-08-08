@@ -14,7 +14,38 @@
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QRandomGenerator>
+#include <QSslSocket>
+#include <QSslKey>
+#include <QSslCertificate>
+#include <QProcess>
 #include <algorithm>
+
+class SslServer : public QTcpServer {
+public:
+    explicit SslServer(QObject* parent = nullptr) : QTcpServer(parent) {}
+    
+    void setSslConfig(const QSslCertificate& cert, const QSslKey& key) {
+        m_cert = cert;
+        m_key = key;
+    }
+
+protected:
+    void incomingConnection(qintptr socketDescriptor) override {
+        QSslSocket* socket = new QSslSocket(this);
+        if (socket->setSocketDescriptor(socketDescriptor)) {
+            socket->setLocalCertificate(m_cert);
+            socket->setPrivateKey(m_key);
+            socket->startServerEncryption();
+            addPendingConnection(socket);
+        } else {
+            delete socket;
+        }
+    }
+
+private:
+    QSslCertificate m_cert;
+    QSslKey m_key;
+};
 
 ServerCore::ServerCore(QObject* parent) : QObject(parent) {
     m_nextToken = 1024;
@@ -37,7 +68,32 @@ bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
     loadServerBanner();
     loadAvatars();
 
-    m_tcp = new QTcpServer(this);
+    QString certPath = dataDir() + "/cert.pem";
+    QString keyPath = dataDir() + "/key.pem";
+    if (!QFile::exists(certPath) || !QFile::exists(keyPath)) {
+        log("Gerando certificado SSL autoassinado para o canal de controle...");
+        QStringList args;
+        args << "req" << "-x509" << "-newkey" << "rsa:2048" << "-nodes"
+             << "-keyout" << keyPath << "-out" << certPath
+             << "-subj" << "/CN=HallaServer" << "-days" << "3650";
+        QProcess::execute("openssl", args);
+    }
+
+    QSslCertificate cert;
+    QSslKey key;
+    QFile certFile(certPath);
+    if (certFile.open(QIODevice::ReadOnly)) {
+        cert = QSslCertificate(&certFile, QSsl::Pem);
+    }
+    QFile keyFile(keyPath);
+    if (keyFile.open(QIODevice::ReadOnly)) {
+        key = QSslKey(&keyFile, QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey);
+    }
+
+    SslServer* sslServer = new SslServer(this);
+    sslServer->setSslConfig(cert, key);
+    m_tcp = sslServer;
+
     connect(m_tcp, &QTcpServer::newConnection, this, &ServerCore::onNewConnection);
     if (!m_tcp->listen(QHostAddress::Any, controlPort)) {
         log(QStringLiteral("FALHA: não foi possível escutar na porta TCP %1: %2")
@@ -2405,13 +2461,20 @@ int ServerCore::channelOfUser(int userId) const {
 }
 
 void ServerCore::removeFromChannels(int userId) {
-    for (SvrChan& c : m_channels) c.users.removeAll(userId);
+    for (SvrChan& c : m_channels) {
+        if (c.users.contains(userId)) {
+            c.users.removeAll(userId);
+            rotateChannelKey(c.id);
+        }
+    }
 }
 
 void ServerCore::addToChannel(int userId, int channelId) {
     removeFromChannels(userId);
-    if (m_channels.contains(channelId))
+    if (m_channels.contains(channelId)) {
         m_channels[channelId].users << userId;
+        rotateChannelKey(channelId);
+    }
 }
 
 ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
@@ -2630,6 +2693,33 @@ void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByt
         if (target == sender) continue;
         if (target->udpPort() > 0) {
             m_voice->sendTo(target->udpAddress(), target->udpPort(), p);
+        }
+    }
+}
+
+void ServerCore::rotateChannelKey(int channelId) {
+    if (!m_channels.contains(channelId)) return;
+    
+    QByteArray key(16, '\0');
+    {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<unsigned int> dis(0, 255);
+        for (int i = 0; i < 16; ++i) {
+            key[i] = char(dis(gen));
+        }
+    }
+    m_channelKeys[channelId] = key;
+    
+    const SvrChan& ch = m_channels[channelId];
+    QJsonObject m = HProto::msg("channel_key");
+    m["channel"] = channelId;
+    m["key"] = QString::fromLatin1(key.toBase64());
+    
+    for (int uid : ch.users) {
+        ClientSession* target = m_clients.value(uid, nullptr);
+        if (target) {
+            target->send(m);
         }
     }
 }

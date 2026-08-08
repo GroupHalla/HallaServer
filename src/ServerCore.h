@@ -188,6 +188,8 @@ private:
     };
     QMap<int, SvrChan> m_channels;
     int m_nextChanId = 1;
+    QMap<int, QByteArray> m_channelKeys; // channelId -> key (16 bytes)
+    void rotateChannelKey(int channelId);
 
     // Cenário 3: grupos, atribuições, chaves usadas, registro de UIDs
     QMap<int, GroupDef> m_groups;            // id -> definição (builtin 1..3, custom >=100)
