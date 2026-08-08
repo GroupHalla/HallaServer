@@ -3,6 +3,7 @@
 #include <QSettings>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTimer>
 #include <QTextStream>
 #include <csignal>
@@ -19,7 +20,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     g_app = &app;
     QCoreApplication::setApplicationName("Halla Server");
-    QCoreApplication::setApplicationVersion("3.2.29");
+    QCoreApplication::setApplicationVersion("1.1.23");
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -70,6 +71,8 @@ int main(int argc, char* argv[]) {
     const int ssWidth = cfg.value("screenshareWidth", 800).toInt();
     const int ssHeight = cfg.value("screenshareHeight", 450).toInt();
     const int ssFps = cfg.value("screenshareFps", 20).toInt();
+    const QString certFile = cfg.value("certFile", "").toString();
+    const QString keyFile = cfg.value("keyFile", "").toString();
     cfg.endGroup();
 
     cfg.beginGroup("database");
@@ -95,7 +98,9 @@ int main(int argc, char* argv[]) {
     core.setScreenshareWidth(ssWidth);
     core.setScreenshareHeight(ssHeight);
     core.setScreenshareFps(ssFps);
-    core.setVersion(QStringLiteral("3.2.29"));
+    if (!certFile.trimmed().isEmpty()) core.setCertificateFile(QFileInfo(certFile).isRelative() ? dir + "/" + certFile : certFile);
+    if (!keyFile.trimmed().isEmpty()) core.setPrivateKeyFile(QFileInfo(keyFile).isRelative() ? dir + "/" + keyFile : keyFile);
+    core.setVersion(QStringLiteral("1.1.23"));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
     core.setDatabaseFile(dir + "/halla-data.db");

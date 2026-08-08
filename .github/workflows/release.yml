@@ -216,9 +216,9 @@ jobs:
           body: |
             ## Halla Server ${{ github.ref_name }}
 
-            ### Versão oficial
-            * UID como identidade persistente do cliente.
-            * Gerenciamento de grupos, membros e cargos.
-            * Servidor compatível com Desktop e Mobile oficiais.
+            ### Novidades
+            * Canal de controle protegido por TLS com certificado autoassinado na primeira execução ou certificado próprio via INI.
+            * Distribuição de chaves de voz por canal pelo canal TLS, com rotação ao entrar/sair e suporte a canais vinculados.
+            * Correção dos comandos avançados do ServerQuery para posição hierárquica e overrides de permissões por canal.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

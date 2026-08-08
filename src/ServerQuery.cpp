@@ -229,7 +229,9 @@ void ServerQuery::handleArgs(QTcpSocket* s, const QString& cmd,
 
     if (cmd == "clientlist" || cmd == "channellist" || cmd == "banlist" ||
         cmd == "clientkick" || cmd == "banclient" || cmd == "banadd" ||
-        cmd == "bandel" || cmd == "gm") {
+        cmd == "bandel" || cmd == "gm" ||
+        cmd == "servergroupsetposition" || cmd == "channelgroupsetpositionreq" ||
+        cmd == "channelgroupsetperm" || cmd == "channelpermlist") {
         // toda a lógica destes comandos vive em ServerCore (friend)
         core->queryCommand(s, cmd, args, [this](QTcpSocket* ss) { ok(ss); },
                            [this](QTcpSocket* ss, int id, const QString& msg) { error(ss, id, msg); });

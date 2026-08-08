@@ -1579,6 +1579,40 @@ void ServerCore::sendWelcome(ClientSession* c) {
     voice["token"] = QString::number(c->voiceToken());
     w["voice"] = voice;
 
+    // Chaves atuais dos canais aos quais o cliente precisa ter acesso chegam
+    // dentro do welcome. Isso evita a corrida em que channel_key era enviado
+    // antes de o cliente marcar a sessão como pronta e acabava ignorado.
+    QJsonObject keys;
+    const int myChannel = channelOfUser(c->id());
+    if (myChannel > 0 && m_channels.contains(myChannel)) {
+        QSet<int> component;
+        QList<int> pending;
+        component.insert(myChannel);
+        pending << myChannel;
+        while (!pending.isEmpty()) {
+            const int current = pending.takeFirst();
+            if (!m_channels.contains(current)) continue;
+            for (int next : m_channels[current].linkedChannels) {
+                if (m_channels.contains(next) && !component.contains(next)) {
+                    component.insert(next);
+                    pending << next;
+                }
+            }
+            for (const SvrChan& candidate : m_channels) {
+                if (candidate.linkedChannels.contains(current) && !component.contains(candidate.id)) {
+                    component.insert(candidate.id);
+                    pending << candidate.id;
+                }
+            }
+        }
+        for (int id : component) {
+            if (!m_channelKeys.contains(id)) rotateChannelKey(id);
+            if (m_channelKeys.contains(id))
+                keys[QString::number(id)] = QString::fromLatin1(m_channelKeys[id].toBase64());
+        }
+    }
+    if (!keys.isEmpty()) w["channelKeys"] = keys;
+
     c->send(w);
 }
 
@@ -1954,6 +1988,10 @@ void ServerCore::handleChanLink(ClientSession* c, const QJsonObject& obj) {
             }
         }
     }
+
+    // Alterar vínculos muda o conjunto de ouvintes; rotaciona a chave dos
+    // componentes afetados para manter forward secrecy básica.
+    for (int id : ids) rotateChannelKey(id);
 
     saveData();
     for (int id : ids) {
@@ -2706,27 +2744,57 @@ void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByt
 
 void ServerCore::rotateChannelKey(int channelId) {
     if (!m_channels.contains(channelId)) return;
-    
-    QByteArray key(16, '\0');
-    {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<unsigned int> dis(0, 255);
-        for (int i = 0; i < 16; ++i) {
-            key[i] = char(dis(gen));
+
+    // A cifra é ponta-a-ponta no nível do canal e o servidor continua sendo
+    // relay puro. Para canais vinculados, todos os canais do componente de
+    // áudio precisam compartilhar a mesma chave; caso contrário, usuários em
+    // canais linkados receberiam frames cifrados com uma chave que não possuem.
+    QSet<int> component;
+    QList<int> pending;
+    component.insert(channelId);
+    pending << channelId;
+    while (!pending.isEmpty()) {
+        const int current = pending.takeFirst();
+        if (!m_channels.contains(current)) continue;
+        for (int next : m_channels[current].linkedChannels) {
+            if (m_channels.contains(next) && !component.contains(next)) {
+                component.insert(next);
+                pending << next;
+            }
+        }
+        for (const SvrChan& candidate : m_channels) {
+            if (candidate.linkedChannels.contains(current) && !component.contains(candidate.id)) {
+                component.insert(candidate.id);
+                pending << candidate.id;
+            }
         }
     }
-    m_channelKeys[channelId] = key;
-    
-    const SvrChan& ch = m_channels[channelId];
-    QJsonObject m = HProto::msg("channel_key");
-    m["channel"] = channelId;
-    m["key"] = QString::fromLatin1(key.toBase64());
-    
-    for (int uid : ch.users) {
-        ClientSession* target = m_clients.value(uid, nullptr);
-        if (target) {
-            target->send(m);
+
+    QByteArray key(16, '\0');
+    QRandomGenerator* rng = QRandomGenerator::system();
+    for (int i = 0; i < key.size(); ++i)
+        key[i] = char(rng->bounded(256));
+
+    for (int id : component)
+        m_channelKeys[id] = key;
+
+    QSet<int> componentUsers;
+    for (int id : component) {
+        if (!m_channels.contains(id)) continue;
+        for (int uid : m_channels[id].users) componentUsers.insert(uid);
+    }
+
+    // Todos no componente recebem a chave de todos os canais do componente.
+    // Assim, quando A escuta B por link de canais, o cliente consegue escolher
+    // a chave pelo canal real do remetente sem o servidor decodificar nada.
+    for (int id : component) {
+        if (!m_channels.contains(id)) continue;
+        QJsonObject m = HProto::msg("channel_key");
+        m["channel"] = id;
+        m["key"] = QString::fromLatin1(key.toBase64());
+        for (int uid : componentUsers) {
+            ClientSession* target = m_clients.value(uid, nullptr);
+            if (target) target->send(m);
         }
     }
 }

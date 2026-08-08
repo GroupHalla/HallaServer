@@ -95,6 +95,8 @@ public:
     int screenshareHeight() const           { return m_screenshareHeight; }
     void setScreenshareFps(int f)           { m_screenshareFps = f; }
     int screenshareFps() const              { return m_screenshareFps; }
+    void setCertificateFile(const QString& f) { m_certFile = f; }
+    void setPrivateKeyFile(const QString& f)  { m_keyFile = f; }
 
     void log(const QString& msg);
     int clientCount() const { return m_clients.size(); }
@@ -163,6 +165,8 @@ private:
     QString m_dbName = "halla_db";
     QString m_dbUser = "root";
     QString m_dbPassword;
+    QString m_certFile;
+    QString m_keyFile;
 
     QMap<int, ClientSession*> m_clients;
     QMap<quint32, ClientSession*> m_byVoiceToken;
