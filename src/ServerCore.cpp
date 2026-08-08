@@ -116,7 +116,11 @@ bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
     }
 
     QList<int> gids = m_assignByUid.value(c->uniqueId());
-    if (gids.isEmpty()) gids << 2; // normal por padrão
+    if (gids.isEmpty()) {
+        gids << 2;
+    } else if (!gids.contains(1) && !gids.contains(2)) {
+        gids.prepend(2);
+    }
     
     for (int gid : gids) {
         const GroupDef g = m_groups.value(gid, m_groups.value(1));
@@ -135,7 +139,11 @@ bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
 int ServerCore::clientPosition(const ClientSession* c) const {
     if (!c) return 0;
     QList<int> gids = m_assignByUid.value(c->uniqueId());
-    if (gids.isEmpty()) gids << 2;
+    if (gids.isEmpty()) {
+        gids << 2;
+    } else if (!gids.contains(1) && !gids.contains(2)) {
+        gids.prepend(2);
+    }
     int maxPos = 0;
     for (int gid : gids) {
         const GroupDef g = m_groups.value(gid, m_groups.value(1));
@@ -194,7 +202,11 @@ int ServerCore::getChannelPermState(const ClientSession* c, int channelId, const
     
     const SvrChan& ch = m_channels[channelId];
     QList<int> gids = m_assignByUid.value(c->uniqueId());
-    if (gids.isEmpty()) gids << 2;
+    if (gids.isEmpty()) {
+        gids << 2;
+    } else if (!gids.contains(1) && !gids.contains(2)) {
+        gids.prepend(2);
+    }
     
     int resolvedState = -2;
     
@@ -266,7 +278,11 @@ bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QSt
 int ServerCore::talkPower(const ClientSession* c) const {
     if (!c) return 0;
     QList<int> gids = m_assignByUid.value(c->uniqueId());
-    if (gids.isEmpty()) gids << 2;
+    if (gids.isEmpty()) {
+        gids << 2;
+    } else if (!gids.contains(1) && !gids.contains(2)) {
+        gids.prepend(2);
+    }
     int maxPower = 0;
     for (int gid : gids) {
         const GroupDef g = m_groups.value(gid, m_groups.value(1));
@@ -302,7 +318,9 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         gids << groupId;
     }
     if (gids.isEmpty()) {
-        gids << 2; // normal por padrão
+        gids << 2;
+    } else if (!gids.contains(1) && !gids.contains(2)) {
+        gids.prepend(2);
     }
     
     QList<int> validIds;
@@ -2070,7 +2088,12 @@ void ServerCore::handleGroupList(ClientSession* c) {
         for (auto it = m_registry.cbegin(); it != m_registry.cend(); ++it) {
             const QString uid = it.key();
             QList<int> assigned = m_assignByUid.value(uid);
-            bool hasGroup = assigned.contains(g.id) || (assigned.isEmpty() && g.id == 2);
+            if (assigned.isEmpty()) {
+                assigned << 2;
+            } else if (!assigned.contains(1) && !assigned.contains(2)) {
+                assigned.prepend(2);
+            }
+            bool hasGroup = assigned.contains(g.id);
             if (!hasGroup) continue;
             QJsonObject member;
             member["uid"] = uid;
@@ -2080,7 +2103,12 @@ void ServerCore::handleGroupList(ClientSession* c) {
         }
         for (ClientSession* online : m_clients) {
             QList<int> assigned = m_assignByUid.value(online->uniqueId());
-            bool hasGroup = assigned.contains(g.id) || (assigned.isEmpty() && g.id == 2);
+            if (assigned.isEmpty()) {
+                assigned << 2;
+            } else if (!assigned.contains(1) && !assigned.contains(2)) {
+                assigned.prepend(2);
+            }
+            bool hasGroup = assigned.contains(g.id);
             if (!hasGroup) continue;
             bool already = false;
             for (const QJsonValue& v : members)
