@@ -25,7 +25,9 @@ void VoiceRelay::onReadyRead() {
         QNetworkDatagram dg = m_socket->receiveDatagram();
         ++m_datagramsIn;
         QByteArray data = dg.data();
-        if (data.size() < 10 || memcmp(data.constData(), "HALL", 4) != 0) {
+        bool isVoice = data.size() >= 10 && memcmp(data.constData(), "HALL", 4) == 0;
+        bool isScreenShare = data.size() >= 10 && memcmp(data.constData(), "HALF", 4) == 0;
+        if (!isVoice && !isScreenShare) {
             ++m_invalid;
             continue;
         }
@@ -62,11 +64,15 @@ void VoiceRelay::onReadyRead() {
 
         const QByteArray payload = data.mid(10);
         if (payload.isEmpty()) continue;
-        ++m_opusFramesIn;
-        m_opusBytesIn += quint64(payload.size());
-
-        // retransmite aos membros do mesmo canal (exceto o falante)
-        m_core->relayVoice(sender, seq, payload);
+        
+        if (isVoice) {
+            ++m_opusFramesIn;
+            m_opusBytesIn += quint64(payload.size());
+            // retransmite aos membros do mesmo canal (exceto o falante)
+            m_core->relayVoice(sender, seq, payload);
+        } else {
+            m_core->relayScreenShare(sender, seq, payload);
+        }
     }
 }
 

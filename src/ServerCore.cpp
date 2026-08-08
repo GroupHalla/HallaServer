@@ -1316,6 +1316,24 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "ft_list")        handleFtList(c, obj);
     else if (t == "ft_download")    handleFtDownload(c, obj);
     else if (t == "ft_delete")      handleFtDelete(c, obj);
+    else if (t == "screenshare_start") {
+        if (!m_allowScreenShare) {
+            sendError(c, "screenshare_disabled", "O compartilhamento de tela está desativado pelo servidor");
+            return;
+        }
+        log(QStringLiteral("Cliente #%1 (%2) iniciou compartilhamento de tela").arg(c->id()).arg(c->name()));
+        QJsonObject m = HProto::msg("user_screenshare_state");
+        m["id"] = c->id();
+        m["on"] = true;
+        broadcast(m);
+    }
+    else if (t == "screenshare_stop") {
+        log(QStringLiteral("Cliente #%1 (%2) parou compartilhamento de tela").arg(c->id()).arg(c->name()));
+        QJsonObject m = HProto::msg("user_screenshare_state");
+        m["id"] = c->id();
+        m["on"] = false;
+        broadcast(m);
+    }
     else if (t == "quit") {
         // desconexão graciosa: notifica os demais antes de fechar
         QJsonObject left = HProto::msg("user_left");
@@ -1460,6 +1478,7 @@ void ServerCore::sendWelcome(ClientSession* c) {
     server["platform"] = "Linux";
 #endif
     server["maxClients"] = m_maxClients;
+    server["screenshare"] = m_allowScreenShare;
     if (!m_serverBanner.isEmpty())
         server["banner"] = QString::fromLatin1(m_serverBanner.toBase64());
     w["server"] = server;
@@ -2583,5 +2602,28 @@ void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray
         } else if (!linked.contains(targetChan)) continue;   // canal ou vínculo
         if (!hasChannelPerm(c, targetChan, QStringLiteral("listen"))) continue;
         m_voice->sendTo(c->udpAddress(), c->udpPort(), packet);
+    }
+}
+
+void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByteArray& payload) {
+    if (!sender || !m_voice || !m_allowScreenShare || payload.isEmpty()) return;
+    const int chan = channelOfUser(sender->id());
+    if (chan == 0 || !m_channels.contains(chan)) return;
+
+    QByteArray p;
+    p.reserve(10 + payload.size());
+    p.append("HALF", 4);
+    quint32 sid = sender->id();
+    p.append(reinterpret_cast<const char*>(&sid), 4);
+    p.append(reinterpret_cast<const char*>(&seq), 2);
+    p.append(payload);
+
+    const SvrChan& ch = m_channels[chan];
+    for (int uid : ch.users) {
+        if (uid == sender->id()) continue;
+        ClientSession* target = m_clients.value(uid, nullptr);
+        if (target && target->udpPort() > 0) {
+            m_voice->sendTo(target->udpAddress(), target->udpPort(), p);
+        }
     }
 }

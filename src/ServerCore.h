@@ -87,6 +87,8 @@ public:
     void setDatabaseUser(const QString& u)  { m_dbUser = u; }
     void setDatabasePassword(const QString& p) { m_dbPassword = p; }
     void setVersion(const QString& v)       { m_version = v; }
+    void setAllowScreenShare(bool on)       { m_allowScreenShare = on; }
+    bool allowScreenShare() const           { return m_allowScreenShare; }
 
     void log(const QString& msg);
     int clientCount() const { return m_clients.size(); }
@@ -116,6 +118,7 @@ public:
 
     ClientSession* clientByVoiceToken(quint32 token) { return m_byVoiceToken.value(token, nullptr); }
     void relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload);
+    void relayScreenShare(ClientSession* sender, quint16 seq, const QByteArray& payload);
     QJsonObject voiceStats() const;
 
 signals:
@@ -141,6 +144,7 @@ private:
     QString m_adminPassword;
     QMap<QString, QString> m_privKeyGroup; // chave -> nome do grupo concedido
     bool m_privKeyReuse = false;
+    bool m_allowScreenShare = true;
     QString m_dataFile;
     QString m_banFile;
     QString m_dbFile;

@@ -66,6 +66,7 @@ int main(int argc, char* argv[]) {
     for (QString& k : privKeys) k = k.trimmed();
     privKeys.removeAll(QString());
     const bool privKeyReuse = cfg.value("privilegeKeyReuse", false).toBool();
+    const bool allowScreenShare = cfg.value("allowScreenShare", true).toBool();
     cfg.endGroup();
 
     cfg.beginGroup("database");
@@ -87,6 +88,7 @@ int main(int argc, char* argv[]) {
     core.setAdminPassword(adminPassword);
     core.setPrivilegeKeys(privKeys);
     core.setPrivilegeKeyReuse(privKeyReuse);
+    core.setAllowScreenShare(allowScreenShare);
     core.setVersion(QStringLiteral("3.2.29"));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
