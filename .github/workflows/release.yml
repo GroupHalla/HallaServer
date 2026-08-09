@@ -278,9 +278,9 @@ jobs:
           body: |
             ## Halla Server ${{ github.ref_name }}
 
-            ### Correções críticas
-            * Corrige bypass do desafio Ed25519: o servidor agora confia apenas no estado verificado da sessão, nunca em campo enviado pelo cliente.
-            * Chaves de voz por canal passam a ter 32 bytes, preparando uso de AEAD forte nos clientes.
-            * Mantém proteções anti-abuso e refatoração de persistência do ServerCore.
+            ### Correções
+            * Corrige permissões padrão/migradas de escuta: clientes normais e Mobile agora recebem relay UDP de voz.
+            * Preserva a checagem de listen no relay, mas adiciona listen/text_chat aos grupos antigos que não tinham esses campos.
+            * Mantém identidade Ed25519 obrigatória e chaves de voz de 32 bytes.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

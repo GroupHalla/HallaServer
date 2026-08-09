@@ -212,13 +212,15 @@ void ServerCore::setupBuiltinGroups() {
     guest.position = 0;  // Nível mais baixo
     guest.order = 20;    // Aparece em último na lista (maior índice)
     guest.perms = QJsonObject{
-        {"join", true}, {"talk", true}, {"poke", true}, {"privmsg", true}, {"whisper", true}, {"talkPower", 10}
+        {"join", true}, {"listen", true}, {"talk", true}, {"text_chat", true},
+        {"poke", true}, {"privmsg", true}, {"whisper", true}, {"talkPower", 10}
     };
     GroupDef normal; normal.id = 2; normal.name = "normal";
     normal.position = 10;  // Nível médio
     normal.order = 10;     // Aparece no meio
     normal.perms = QJsonObject{
-        {"join", true}, {"talk", true}, {"poke", true}, {"privmsg", true}, {"whisper", true}, {"chanCreateTemp", true},
+        {"join", true}, {"listen", true}, {"talk", true}, {"text_chat", true},
+        {"poke", true}, {"privmsg", true}, {"whisper", true}, {"chanCreateTemp", true},
         {"talkPower", 25}
     };
     GroupDef admin;  admin.id = 3;  admin.name = "admin";
@@ -233,7 +235,7 @@ void ServerCore::setupBuiltinGroups() {
         {"chanCreatePerm", true}, {"chanEdit", true}, {"chanDelete", true},
         {"serverEdit", true}, {"groupEdit", true}, {"poke", true},
         {"privmsg", true}, {"whisper", true}, {"ignoreChanPass", true}, {"ignoreTalkPower", true},
-        {"talkPower", 75}
+        {"text_chat", true}, {"listen", true}, {"talkPower", 75}
     };
     m_groups[1] = guest;
     m_groups[2] = normal;

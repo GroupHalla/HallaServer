@@ -15,6 +15,22 @@
 // Persistência e banco de dados do ServerCore. Mantido separado do fluxo de
 // sessão/rede para reduzir o tamanho do antigo ServerCore.cpp monolítico.
 
+static bool ensureGroupRuntimeDefaults(GroupDef& g) {
+    bool changed = false;
+    // Versões antigas não tinham a permissão global "listen", mas relayVoice
+    // passou a checá-la. Sem esta migração, clientes normais/mobile entram e
+    // veem o indicador de fala via TCP, porém o servidor não retransmite UDP.
+    if (!g.perms.contains(QStringLiteral("listen"))) {
+        g.perms[QStringLiteral("listen")] = true;
+        changed = true;
+    }
+    if (!g.perms.contains(QStringLiteral("text_chat"))) {
+        g.perms[QStringLiteral("text_chat")] = true;
+        changed = true;
+    }
+    return changed;
+}
+
 void ServerCore::loadData() {
     m_channels.clear();
     m_groups.clear();
@@ -173,6 +189,7 @@ void ServerCore::loadData() {
                 }
             }
         }
+        for (GroupDef& g : m_groups) ensureGroupRuntimeDefaults(g);
 
         if (q.exec("SELECT uid, groupId FROM assignments")) {
             while (q.next()) {
@@ -517,6 +534,7 @@ void ServerCore::loadDataFromJson() {
             m_groups[g.id].position = g.position;  // Pilar 1
         }
     }
+    for (GroupDef& g : m_groups) ensureGroupRuntimeDefaults(g);
     const QJsonObject assign = root["assignments"].toObject();
     for (auto it = assign.begin(); it != assign.end(); ++it) {
         if (it.value().isArray()) {
