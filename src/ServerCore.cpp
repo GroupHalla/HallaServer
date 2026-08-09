@@ -704,6 +704,10 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "ft_list")        handleFtList(c, obj);
     else if (t == "ft_download")    handleFtDownload(c, obj);
     else if (t == "ft_delete")      handleFtDelete(c, obj);
+    else if (t == "webrtc_stream_start") handleWebRtcStreamState(c, true);
+    else if (t == "webrtc_stream_stop") handleWebRtcStreamState(c, false);
+    else if (t == "webrtc_watch_request" || t == "webrtc_watch_stop" ||
+             t == "webrtc_offer" || t == "webrtc_answer" || t == "webrtc_ice") handleWebRtcSignal(c, obj);
     else if (t == "screenshare_start") {
         if (!m_allowScreenShare) {
             sendError(c, "screenshare_disabled", "O compartilhamento de tela está desativado pelo servidor");
@@ -736,6 +740,55 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
         log(QStringLiteral("Cliente #%1 (%2) saiu").arg(c->id()).arg(c->name()));
         c->closeAndDelete();
     }
+}
+
+void ServerCore::handleWebRtcStreamState(ClientSession* c, bool on) {
+    if (!c) return;
+    if (on && !m_allowScreenShare) {
+        sendError(c, "screenshare_disabled", "O compartilhamento de tela está desativado pelo servidor");
+        return;
+    }
+    c->setScreensharing(on);
+    QJsonObject m = HProto::msg("user_screenshare_state");
+    m["id"] = c->id();
+    m["on"] = on;
+    m["mode"] = QStringLiteral("webrtc");
+    broadcast(m);
+    log(QStringLiteral("Cliente #%1 (%2) %3 transmissão WebRTC")
+            .arg(c->id()).arg(c->name(), on ? QStringLiteral("iniciou") : QStringLiteral("parou")));
+}
+
+void ServerCore::handleWebRtcSignal(ClientSession* c, const QJsonObject& obj) {
+    if (!c) return;
+    const QString t = obj["t"].toString();
+    const int to = obj["to"].toInt();
+    ClientSession* target = m_clients.value(to, nullptr);
+    if (!target || target == c) {
+        sendError(c, "webrtc_target", "Cliente de destino inválido");
+        return;
+    }
+
+    const int fromChan = channelOfUser(c->id());
+    const int toChan = channelOfUser(target->id());
+    if (fromChan == 0 || fromChan != toChan) {
+        sendError(c, "webrtc_channel", "WebRTC permitido apenas entre usuários do mesmo canal");
+        return;
+    }
+    if (!hasChannelPerm(c, fromChan, QStringLiteral("listen"))
+            || !hasChannelPerm(target, toChan, QStringLiteral("listen"))) {
+        sendError(c, "no_permission", "Sem permissão para sinalização WebRTC neste canal");
+        return;
+    }
+    if (t == QLatin1String("webrtc_watch_request") && !target->screensharing()) {
+        sendError(c, "webrtc_not_streaming", "Este usuário não está transmitindo");
+        return;
+    }
+
+    QJsonObject out = obj;
+    out["from"] = c->id();
+    out["fromName"] = c->name();
+    out["to"] = target->id();
+    target->send(out);
 }
 
 void ServerCore::handleIdentityProof(ClientSession* c, const QJsonObject& obj) {

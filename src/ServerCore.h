@@ -276,6 +276,8 @@ private:
     void handleFtList(ClientSession* c, const QJsonObject& obj);
     void handleFtDownload(ClientSession* c, const QJsonObject& obj);
     void handleFtDelete(ClientSession* c, const QJsonObject& obj);
+    void handleWebRtcSignal(ClientSession* c, const QJsonObject& obj);
+    void handleWebRtcStreamState(ClientSession* c, bool on);
 
     // permissões
     bool hasPerm(const ClientSession* c, const char* key) const;

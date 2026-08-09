@@ -278,9 +278,9 @@ jobs:
           body: |
             ## Halla Server ${{ github.ref_name }}
 
-            ### Correções
-            * O estado de transmissão de tela agora é persistido na sessão e enviado no welcome, permitindo Mobile ver transmissões já abertas ao entrar.
-            * Mantém correção de rate limit para mensagens `talking` e permissões de escuta para relay UDP.
-            * Compatível com Halla Mobile v1.0.27+ para assistir transmissões ativas.
+            ### WebRTC signaling
+            * Adiciona signaling WebRTC via TCP/TLS: stream_start/stop, watch_request/stop, offer, answer e ICE.
+            * Servidor valida mesmo canal e permissão antes de rotear mensagens entre transmissor e viewer.
+            * Base inicial para substituir o antigo screen share JPEG/UDP manual por WebRTC.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
