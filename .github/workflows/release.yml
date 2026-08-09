@@ -279,8 +279,8 @@ jobs:
             ## Halla Server ${{ github.ref_name }}
 
             ### Correções
-            * Corrige permissões padrão/migradas de escuta: clientes normais e Mobile agora recebem relay UDP de voz.
-            * Preserva a checagem de listen no relay, mas adiciona listen/text_chat aos grupos antigos que não tinham esses campos.
-            * Mantém identidade Ed25519 obrigatória e chaves de voz de 32 bytes.
+            * Remove rate limit com aviso para mensagens `talking`, evitando alerta de spam quando o Mobile alterna VAD/PTT durante fala longa.
+            * Mantém rate limit para chat, movimento, ping, status e transferências.
+            * Mantém permissões padrão/migradas de escuta para relay UDP de voz.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

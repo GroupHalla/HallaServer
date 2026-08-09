@@ -116,7 +116,9 @@ static void messageRateLimitFor(const QString& type, int& maxEvents, int& window
     maxEvents = 60;
     if (type == QLatin1String("chat")) { maxEvents = 20; return; }
     if (type == QLatin1String("move") || type == QLatin1String("move_other")) { maxEvents = 15; return; }
-    if (type == QLatin1String("talking")) { maxEvents = 40; return; }
+    // talking é controle de VAD/PTT, não chat. Em microfones ruidosos o Mobile
+    // pode alternar fala/silêncio muitas vezes; não avise o usuário como spam.
+    if (type == QLatin1String("talking")) { maxEvents = 0; return; }
     if (type == QLatin1String("status") || type == QLatin1String("ping")) { maxEvents = 30; return; }
     if (type.startsWith(QLatin1String("ft_"))) { maxEvents = 8; windowMs = 60'000; return; }
     if (type == QLatin1String("identity_proof")) { maxEvents = 5; windowMs = 15'000; return; }
