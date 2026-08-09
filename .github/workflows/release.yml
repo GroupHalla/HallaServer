@@ -279,8 +279,8 @@ jobs:
             ## Halla Server ${{ github.ref_name }}
 
             ### Correções
-            * Remove rate limit com aviso para mensagens `talking`, evitando alerta de spam quando o Mobile alterna VAD/PTT durante fala longa.
-            * Mantém rate limit para chat, movimento, ping, status e transferências.
-            * Mantém permissões padrão/migradas de escuta para relay UDP de voz.
+            * O estado de transmissão de tela agora é persistido na sessão e enviado no welcome, permitindo Mobile ver transmissões já abertas ao entrar.
+            * Mantém correção de rate limit para mensagens `talking` e permissões de escuta para relay UDP.
+            * Compatível com Halla Mobile v1.0.27+ para assistir transmissões ativas.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

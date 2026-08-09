@@ -710,6 +710,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
             return;
         }
         log(QStringLiteral("Cliente #%1 (%2) iniciou compartilhamento de tela").arg(c->id()).arg(c->name()));
+        c->setScreensharing(true);
         QJsonObject m = HProto::msg("user_screenshare_state");
         m["id"] = c->id();
         m["on"] = true;
@@ -717,6 +718,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     }
     else if (t == "screenshare_stop") {
         log(QStringLiteral("Cliente #%1 (%2) parou compartilhamento de tela").arg(c->id()).arg(c->name()));
+        c->setScreensharing(false);
         QJsonObject m = HProto::msg("user_screenshare_state");
         m["id"] = c->id();
         m["on"] = false;
