@@ -278,9 +278,9 @@ jobs:
           body: |
             ## Halla Server ${{ github.ref_name }}
 
-            ### Novidades
-            * Refatoração inicial do ServerCore: persistência e banco movidos para ServerCoreStorage.cpp.
-            * Mantém proteções anti-abuso, rate limit, validação de campos e identidade Ed25519.
-            * Remoção dos pacotes binários antigos do repositório; distribuição fica nas Releases.
+            ### Correções críticas
+            * Corrige bypass do desafio Ed25519: o servidor agora confia apenas no estado verificado da sessão, nunca em campo enviado pelo cliente.
+            * Chaves de voz por canal passam a ter 32 bytes, preparando uso de AEAD forte nos clientes.
+            * Mantém proteções anti-abuso e refatoração de persistência do ServerCore.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

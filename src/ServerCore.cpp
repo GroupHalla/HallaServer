@@ -743,8 +743,8 @@ void ServerCore::handleIdentityProof(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     QJsonObject hello = c->pendingIdentityHello();
-    hello["identityVerified"] = true;
     hello["uid"] = uidForIdentityPublicKey(pub);
+    c->setIdentityVerified(true);
     c->clearPendingIdentity();
     handleHello(c, hello);
 }
@@ -771,7 +771,7 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
-    if (!obj["identityVerified"].toBool(false)) {
+    if (!c->identityVerified()) {
         const QByteArray pub = QByteArray::fromBase64(obj["idPub"].toString().toLatin1());
         if (pub.isEmpty()) {
             sendError(c, "bad_identity", "Identidade criptográfica ausente — atualize o cliente");
@@ -2157,7 +2157,7 @@ void ServerCore::rotateChannelKey(int channelId) {
         }
     }
 
-    QByteArray key(16, '\0');
+    QByteArray key(32, '\0');
     QRandomGenerator* rng = QRandomGenerator::system();
     for (int i = 0; i < key.size(); ++i)
         key[i] = char(rng->bounded(256));

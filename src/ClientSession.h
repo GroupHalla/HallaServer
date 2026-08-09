@@ -84,6 +84,8 @@ public:
     QDateTime lastUdpSeenAt() const         { return m_lastUdpSeen; }
     bool allowRate(const QString& type, int maxEvents, int windowMs);
 
+    void setIdentityVerified(bool on) { m_identityVerified = on; }
+    bool identityVerified() const { return m_identityVerified; }
     void setPendingIdentity(const QJsonObject& hello, const QByteArray& pub, const QByteArray& nonce) {
         m_pendingIdentityHello = hello; m_pendingIdentityPub = pub; m_pendingIdentityNonce = nonce;
     }
@@ -132,6 +134,7 @@ private:
     QDateTime m_lastActivity = QDateTime::currentDateTimeUtc();
     QDateTime m_lastUdpSeen;
     QMap<QString, QList<qint64>> m_rateBuckets;
+    bool m_identityVerified = false;
     QJsonObject m_pendingIdentityHello;
     QByteArray m_pendingIdentityPub;
     QByteArray m_pendingIdentityNonce;
