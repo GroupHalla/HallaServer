@@ -279,8 +279,8 @@ jobs:
             ## Halla Server ${{ github.ref_name }}
 
             ### Novidades
-            * Proteções anti-abuso: limite de 2 MiB por mensagem TCP, limite por IP, timeout de conexão ociosa e limpeza de endpoint UDP.
-            * Rate limit por tipo de mensagem, incluindo server_probe, chat, movimento, status, ping e transferência de arquivos.
-            * Validação mais estrita de nick, chat, descrições, tópicos e campos de canais.
+            * Refatoração inicial do ServerCore: persistência e banco movidos para ServerCoreStorage.cpp.
+            * Mantém proteções anti-abuso, rate limit, validação de campos e identidade Ed25519.
+            * Remoção dos pacotes binários antigos do repositório; distribuição fica nas Releases.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

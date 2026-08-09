@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     g_app = &app;
     QCoreApplication::setApplicationName("Halla Server");
-    QCoreApplication::setApplicationVersion("1.1.25");
+    QCoreApplication::setApplicationVersion("1.1.26");
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -100,7 +100,7 @@ int main(int argc, char* argv[]) {
     core.setScreenshareFps(ssFps);
     if (!certFile.trimmed().isEmpty()) core.setCertificateFile(QFileInfo(certFile).isRelative() ? dir + "/" + certFile : certFile);
     if (!keyFile.trimmed().isEmpty()) core.setPrivateKeyFile(QFileInfo(keyFile).isRelative() ? dir + "/" + keyFile : keyFile);
-    core.setVersion(QStringLiteral("1.1.25"));
+    core.setVersion(QStringLiteral("1.1.26"));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
     core.setDatabaseFile(dir + "/halla-data.db");
