@@ -7,21 +7,15 @@
 #include <QHostAddress>
 #include <QByteArray>
 
-// ============================================================================
-// Halla Protocol v2 — camada compartilhada (mesmo código no cliente e servidor)
-// Vide PROTOCOL.md para a especificação completa.
-// v2: permissões granulares por grupo, banlist, grupos por UID, talk power.
-// O servidor aceita clientes v1 (recursos novos exigem v2).
-// ============================================================================
-
+// Protocolo v4: identidade Ed25519, voz AEAD e token UDP aleatório de 128 bits.
 namespace HProto {
 
 constexpr quint16 kDefaultPort = 9987;
-constexpr quint32 kVoiceMagic = 0x48414C4C; // "HALL"
-constexpr int kProtoVersion = 3;    // versão máxima suportada
-constexpr int kProtoMin = 1;        // versão mínima aceita pelo servidor
+constexpr int kProtoVersion = 4;
+constexpr int kProtoMin = 1;
+constexpr int kVoiceTokenBytes = 16;
+constexpr int kClientMediaHeaderV4Bytes = 4 + kVoiceTokenBytes + 2;
 
-// ---- controle TCP: JSON compactado terminado em '\n' ----------------------
 inline QByteArray encodeMsg(const QJsonObject& obj) {
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
     data.append('\n');
@@ -34,7 +28,6 @@ inline QJsonObject msg(const QString& type) {
     return o;
 }
 
-// Monta a representação JSON de um usuário
 inline QJsonObject userJson(int id, const QString& name, const QString& uid,
                             const QString& ver, const QString& platform,
                             const QString& desc, const QString& group,
@@ -44,12 +37,10 @@ inline QJsonObject userJson(int id, const QString& name, const QString& uid,
     u["id"] = id; u["name"] = name; u["uid"] = uid; u["ver"] = ver;
     u["platform"] = platform; u["desc"] = desc; u["group"] = group;
     u["mic"] = mic; u["spk"] = spk; u["away"] = away; u["rec"] = rec;
-    u["cc"] = cc; u["talking"] = talking;
-    u["groupPosition"] = groupPosition;  // Pilar 1: posição hierárquica
+    u["cc"] = cc; u["talking"] = talking; u["position"] = groupPosition;
     return u;
 }
 
-// Monta a representação JSON de um canal
 inline QJsonObject chanJson(int id, int parent, const QString& name,
                             const QString& topic, const QString& desc, bool pw,
                             bool def, int type, bool moderated, int codec,
@@ -65,20 +56,47 @@ inline QJsonObject chanJson(int id, int parent, const QString& name,
     return c;
 }
 
-// ---- voz UDP ---------------------------------------------------------------
-// cliente -> servidor:  magic | token(u32) | seq(u16) | opus...
-inline QByteArray encodeVoiceClient(quint32 token, quint16 seq, const QByteArray& opus) {
+// v4 cliente -> servidor: "HAL4" | token(16 bytes) | seq(u16 LE) | AEAD payload.
+inline QByteArray encodeClientMediaV4(const char magic[4], const QByteArray& token,
+                                      quint16 seq, const QByteArray& payload) {
+    if (token.size() != kVoiceTokenBytes) return {};
+    QByteArray p;
+    p.reserve(kClientMediaHeaderV4Bytes + payload.size());
+    p.append(magic, 4);
+    p.append(token);
+    p.append(reinterpret_cast<const char*>(&seq), 2);
+    p.append(payload);
+    return p;
+}
+
+inline QByteArray encodeVoiceClient(const QByteArray& token, quint16 seq,
+                                    const QByteArray& opus) {
+    return encodeClientMediaV4("HAL4", token, seq, opus);
+}
+
+inline QByteArray encodeScreenClient(const QByteArray& token, quint16 seq,
+                                     const QByteArray& payload) {
+    return encodeClientMediaV4("HAF4", token, seq, payload);
+}
+
+// Compatibilidade cliente legado v1-v3: "HALL" | token(u32) | seq | payload.
+inline QByteArray encodeVoiceClientLegacy(quint32 token, quint16 seq,
+                                          const QByteArray& opus) {
     QByteArray p;
     p.reserve(10 + opus.size());
-    p.append(reinterpret_cast<const char*>(&kVoiceMagic), 4); // magic já é "HALL" LE
-    p[0] = 'H'; p[1] = 'A'; p[2] = 'L'; p[3] = 'L';
+    p.append("HALL", 4);
     p.append(reinterpret_cast<const char*>(&token), 4);
     p.append(reinterpret_cast<const char*>(&seq), 2);
     p.append(opus);
     return p;
 }
 
-// servidor -> cliente:  magic | fromId(u32) | seq(u16) | opus...
+inline QByteArray encodeVoiceClient(quint32 legacyToken, quint16 seq,
+                                    const QByteArray& opus) {
+    return encodeVoiceClientLegacy(legacyToken, seq, opus);
+}
+
+// servidor -> cliente permanece estável: "HALL" | fromId(u32) | seq | payload.
 inline QByteArray encodeVoiceServer(quint32 fromId, quint16 seq, const QByteArray& opus) {
     QByteArray p;
     p.reserve(10 + opus.size());

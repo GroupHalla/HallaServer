@@ -1,11 +1,11 @@
 
-# Halla Protocol — Especificação (v1 → v3.1 + Camada de Segurança + WebRTC)
+# Halla Protocol — Especificação (v1 → v4 + Camada de Segurança + WebRTC)
 
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.31, cliente desktop ≥ 1.0.49,
-> mobile ≥ 1.0.13. A camada de segurança (TLS, identidade Ed25519, voz AEAD)
+> **Estado atual:** servidor Halla ≥ 1.1.33, cliente desktop ≥ 1.0.50,
+> mobile ≥ 1.0.41. A camada de segurança (TLS, identidade Ed25519, voz AEAD)
 > é **obrigatória** para todas as conexões — não é negociável por versão.
 
 ## Visão geral
@@ -16,7 +16,7 @@ pessoa possa implementar clientes, bots e ferramentas compatíveis.
 | Voz | UDP | 9987 | Pacotes Opus de 20 ms cifrados (ChaCha20-Poly1305), relay por canal |
 | Screen share (legado) | UDP | 9987 | Frames JPEG fatiados e cifrados (pacotes `HALF`) |
 | Mídia WebRTC | P2P (DTLS-SRTP) | dinâmica | Transmissão de tela moderna; o servidor só sinaliza |
-| ServerQuery | TCP (texto) | 10011 | Administração remota em modo texto |
+| ServerQuery | **TCP + TLS** (desligado por padrão) | configurável | Administração remota |
 
 ## Camada de segurança
 
@@ -120,7 +120,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 |---|---|---|---|
 | `server_probe` | C→S | — | Consulta pública (via TLS); não cria sessão |
 | `server_probe` | S→C | `server:{name,motd,ver,maxClients}`, `clients`, `maxClients` | Resposta |
-| `hello` | C→S | `proto` (1..3), `uid`, `nick`, `idPub` (base64 DER), `pass?`, `adminPass?`, `ver`, `platform` | Login |
+| `hello` | C→S | `proto` (1..4), `uid`, `nick`, `idPub` (base64 DER), `pass?`, `adminPass?`, `ver`, `platform` | Login |
 | `identity_challenge` | S→C | `nonce` (base64, 32 B) | Desafio Ed25519 |
 | `identity_proof` | C→S | `sig` (base64) | Assinatura do nonce |
 | `welcome` | S→C | ver abaixo | Estado completo após login |
@@ -132,9 +132,9 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 {
   "t": "welcome",
   "selfId": 5,
-  "proto": 3,
+  "proto": 4,
   "server": {
-    "name": "Servidor Halla", "motd": "…", "ver": "1.1.31",
+    "name": "Servidor Halla", "motd": "…", "ver": "1.1.33",
     "platform": "Linux", "maxClients": 32, "banner": "base64…",
     "screenshare": true, "screenshare_w": 800,
     "screenshare_h": 450, "screenshare_fps": 20
@@ -143,7 +143,8 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
   "channels": [ /* objetos chan */ ],
   "groups":   [ { "id":1, "name":"guest", "perms":{…} } ],
   "myPerms":  { "…": true },
-  "voice":    { "udp": 9987, "token": "123456" },
+  "voice":    { "udp": 9987, "token": "001122…eeff", "format": "hex128" },
+  "iceServers": [{ "urls": "stun:…" }, { "urls": "turn:…", "username": "…", "credential": "…" }],
   "channelKeys": { "1": "base64(32 bytes)…" }
 }
 ```
@@ -266,15 +267,15 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 
 | Bytes | Campo |
 |---|---|
-| 4 | magic `"HALL"` |
-| 4 | `token` (LE, recebido no `welcome`/`voice_token`) |
+| 4 | magic `"HAL4"` |
+| 16 | token CSPRNG de 128 bits (bytes do hex recebido via TLS) |
 | 2 | `seq` u16 (LE) |
 | 4 | `counter` u32 (LE) — parte do payload AEAD |
 | N | ciphertext Opus |
 | 16 | tag Poly1305 |
 
-O servidor aprende o endpoint UDP do cliente pelo primeiro pacote válido,
-autentica pelo token e retransmite aos membros do canal (+ canais vinculados).
+O servidor aprende o endpoint UDP somente depois de validar a credencial aleatória
+de 128 bits recebida pelo cliente via TLS e retransmite aos membros do canal (+ canais vinculados).
 Sem token válido, o pacote é descartado. Frames de 20 ms, 48 kHz mono,
 Opus com bitrate configurável por canal (16–384 kbps).
 
@@ -296,8 +297,8 @@ de até 1200 bytes; cada chunk é cifrado individualmente com o AEAD do canal.
 
 | Bytes | Campo |
 |---|---|
-| 4 | magic `"HALF"` |
-| 4 | `token` (LE) no sentido C→S |
+| 4 | magic `"HAF4"` no sentido C→S (`"HALF"` permanece S→C) |
+| 16 | token CSPRNG de 128 bits no sentido C→S |
 | 2 | `seq` u16 (LE) — identifica o frame |
 | 1 | `chunkIdx` |
 | 1 | `chunkCount` (máx. 255) |
@@ -393,8 +394,10 @@ o próprio canal sem `chanEdit` e expulsam dele (exceto outros operadores).
 
 ## ServerQuery (v3.1)
 
-Interface TCP em modo texto na porta **10011** (configurável em `[query]`;
-`0` desliga). Comandos `chave=valor`; toda resposta termina com
+Interface TCP protegida por **TLS**, desligada por padrão (`port=0`) e ligada a
+`127.0.0.1` por padrão. A porta e o bind são configuráveis em `[query]`. Há
+limite de 64 KiB por conexão, linhas de 8 KiB, no máximo 32 conexões e cinco
+tentativas de login por IP/minuto. Comandos `chave=valor`; toda resposta termina com
 `error id=0 msg=ok` (ou o código) + `\n\r`. Escapes: espaço `\s`, pipe `\p`,
 barra `\/`.
 
@@ -412,14 +415,14 @@ help | version | logout | quit
 
 Códigos: `1538` login inválido, `512` não encontrado, `256` comando
 desconhecido, `2568` não autenticado. Na primeira execução sem senha, o
-servidor gera `queryPass` aleatório, mostra no console e grava em
-`halla-data.json`.
+servidor gera uma senha aleatória de 24 caracteres, mostra uma única vez e
+grava somente seu hash PBKDF2-SHA256 no banco.
 
 ## Persistência
 
 | Arquivo | Conteúdo |
 |---|---|
-| `halla-data.json` | canais, grupos, atribuições UID→grupo, chaves usadas, registro de identidades, `queryPass` |
+| `halla-data.json` | canais, grupos, atribuições UID→grupo, chaves usadas, registro de identidades, `queryPass` (hash PBKDF2) |
 | `halla-bans.json` | banimentos (UID e IP) |
 | `halla-data.db` | banco SQLite local (espelho/consultas) |
 | `[database]` no INI | opcional: MySQL (`dbName`, `dbUser`, `dbPassword`); o servidor reconecta antes de salvar |
@@ -429,8 +432,10 @@ Canais temporários somem quando ficam vazios; avatares ficam em
 
 ## Compatibilidade e versionamento
 
-- `hello.proto`: 1..3 (`kProtoVersion = 3`, `kProtoMin = 1`). Recursos v2/v3
-  exigem ambos os lados na versão correspondente.
+- `hello.proto`: 1..4 (`kProtoVersion = 4`, `kProtoMin = 1`). O v4 troca o
+  token UDP sequencial de 32 bits por credencial CSPRNG de 128 bits e usa
+  `HAL4`/`HAF4` no sentido cliente→servidor. O servidor mantém recepção legada
+  v1-v3 durante a migração.
 - **TLS e identidade Ed25519 são incondicionais**: clientes antigos (sem TLS
   ou sem `idPub`) recebem erro/queda de conexão e devem atualizar.
 - Voz sem chave (texto puro) só é aceita transitoriamente quando o canal
@@ -463,5 +468,6 @@ Canais temporários somem quando ficam vazios; avatares ficam em
 | v2 | Permissões granulares, banlist UID+IP, grupos por UID, talk power, chaves de privilégio de uso único |
 | v3 | Avatares, mensagens offline, reclamações, operadores de canal, sussurro, transferência de arquivos |
 | v3.1 | ServerQuery na porta 10011 |
+| v4 | Token UDP CSPRNG de 128 bits, `HAL4`/`HAF4`, ICE/TURN distribuído pelo servidor e ServerQuery TLS |
 | Segurança (obrigatória) | TLS + TOFU, identidade Ed25519 com desafio, chaves de canal de 32 B com rotação, ChaCha20-Poly1305 na voz e no screen share legado, limites/rate limit |
 | WebRTC | Sinalização de transmissão de tela via servidor, mídia P2P DTLS-SRTP |

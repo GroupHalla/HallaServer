@@ -1,37 +1,69 @@
 #include "ServerQuery.h"
 #include "ServerCore.h"
 #include "ClientSession.h"
+#include "PasswordHash.h"
 
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QSslSocket>
+#include <QSslError>
+#include <QCryptographicHash>
+#include <openssl/crypto.h>
 #include <QRandomGenerator>
 #include <QDateTime>
 #include <QStringList>
+
+
+namespace {
+class QueryTlsServer final : public QTcpServer {
+public:
+    QueryTlsServer(const QSslCertificate& certificate, const QSslKey& privateKey, QObject* parent)
+        : QTcpServer(parent), m_certificate(certificate), m_privateKey(privateKey) {}
+protected:
+    void incomingConnection(qintptr descriptor) override {
+        auto* socket = new QSslSocket(this);
+        if (!socket->setSocketDescriptor(descriptor)) { socket->deleteLater(); return; }
+        socket->setLocalCertificate(m_certificate);
+        socket->setPrivateKey(m_privateKey);
+        socket->startServerEncryption();
+        addPendingConnection(socket);
+    }
+private:
+    QSslCertificate m_certificate;
+    QSslKey m_privateKey;
+};
+}
 
 ServerQuery::ServerQuery(ServerCore* core, QObject* parent)
     : QObject(parent), m_core(core) {}
 
 void ServerQuery::setCredentials(const QString& user, const QString& pass) {
     if (!user.isEmpty()) m_user = user;
-    if (!pass.isEmpty()) m_pass = pass;
+    if (!pass.isEmpty())
+        m_passHash = PasswordHash::isEncoded(pass) ? pass : PasswordHash::create(pass);
 }
 
-bool ServerQuery::start(quint16 port) {
-    if (port == 0) return true; // desligado
+void ServerQuery::setTlsConfiguration(const QSslCertificate& certificate, const QSslKey& privateKey) {
+    m_certificate = certificate;
+    m_privateKey = privateKey;
+}
 
-    if (m_pass.isEmpty()) {
-        // estilo Halla: primeira execução gera uma senha e a mostra no log
-        const QString chars = QStringLiteral("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789");
-        QString pw;
-        for (int i = 0; i < 12; ++i)
-            pw += chars.at(int(QRandomGenerator::global()->bounded(chars.size())));
-        m_pass = pw;
+bool ServerQuery::start(quint16 port, const QHostAddress& bindAddress) {
+    if (port == 0) return true;
+    if (m_certificate.isNull() || m_privateKey.isNull()) return false;
+
+    if (m_passHash.isEmpty()) {
+        const QString chars = QStringLiteral("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#%+=");
+        for (int i = 0; i < 24; ++i)
+            m_generatedPlaintext += chars.at(int(QRandomGenerator::system()->bounded(chars.size())));
+        m_passHash = PasswordHash::create(m_generatedPlaintext);
+        if (m_passHash.isEmpty()) return false;
         m_passGenerated = true;
     }
 
-    m_srv = new QTcpServer(this);
+    m_srv = new QueryTlsServer(m_certificate, m_privateKey, this);
     connect(m_srv, &QTcpServer::newConnection, this, &ServerQuery::onNew);
-    if (!m_srv->listen(QHostAddress::Any, port)) {
+    if (!m_srv->listen(bindAddress, port)) {
         delete m_srv;
         m_srv = nullptr;
         return false;
@@ -95,6 +127,12 @@ void ServerQuery::error(QTcpSocket* s, int id, const QString& msg) {
 void ServerQuery::onNew() {
     while (m_srv->hasPendingConnections()) {
         QTcpSocket* s = m_srv->nextPendingConnection();
+        if (m_bufs.size() >= 32) {
+            s->disconnectFromHost();
+            s->deleteLater();
+            continue;
+        }
+        m_bufs.insert(s, {});
         connect(s, &QTcpSocket::readyRead, this, [this, s] { onRead(s); });
         connect(s, &QTcpSocket::disconnected, this, [this, s] {
             m_authed.remove(s);
@@ -108,16 +146,39 @@ void ServerQuery::onNew() {
 }
 
 void ServerQuery::onRead(QTcpSocket* s) {
+    static constexpr int kMaxBuffer = 64 * 1024;
+    static constexpr int kMaxLine = 8 * 1024;
     QByteArray& buf = m_bufs[s];
     buf += s->readAll();
+    if (buf.size() > kMaxBuffer) {
+        error(s, 256, QStringLiteral("buffer excede 64 KiB"));
+        s->disconnectFromHost();
+        return;
+    }
     int idx;
     while ((idx = buf.indexOf('\n')) >= 0) {
         QByteArray line = buf.left(idx);
         buf.remove(0, idx + 1);
+        if (line.size() > kMaxLine) {
+            error(s, 256, QStringLiteral("linha excede 8 KiB"));
+            s->disconnectFromHost();
+            return;
+        }
         if (line.endsWith('\r')) line.chop(1);
         handleLine(s, QString::fromUtf8(line).trimmed());
         if (!s->isOpen()) { m_bufs.remove(s); return; }
     }
+}
+
+bool ServerQuery::allowLoginAttempt(QTcpSocket* s) {
+    const QString ip = s->peerAddress().toString();
+    QList<qint64>& attempts = m_loginAttemptsByIp[ip];
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    for (int i = attempts.size() - 1; i >= 0; --i)
+        if (now - attempts[i] > 60'000) attempts.removeAt(i);
+    if (attempts.size() >= 5) return false;
+    attempts << now;
+    return true;
 }
 
 bool ServerQuery::needAuth(QTcpSocket* s, const QString& cmd) {
@@ -179,9 +240,20 @@ void ServerQuery::handleArgs(QTcpSocket* s, const QString& cmd,
         return;
     }
     if (cmd == "login") {
-        const QString u = args.value(QStringLiteral("client_login_name"));
-        const QString p = args.value(QStringLiteral("client_login_password"));
-        if (u == m_user && p == m_pass) {
+        if (!allowLoginAttempt(s)) {
+            error(s, 1539, QStringLiteral("muitas tentativas; aguarde 60 segundos"));
+            s->disconnectFromHost();
+            return;
+        }
+        const QByteArray suppliedUser = QCryptographicHash::hash(
+            args.value(QStringLiteral("client_login_name")).toUtf8(), QCryptographicHash::Sha256);
+        const QByteArray expectedUser = QCryptographicHash::hash(m_user.toUtf8(), QCryptographicHash::Sha256);
+        const bool userMatches = suppliedUser.size() == expectedUser.size()
+            && CRYPTO_memcmp(suppliedUser.constData(), expectedUser.constData(), size_t(expectedUser.size())) == 0;
+        const bool matches = userMatches && PasswordHash::verify(
+            args.value(QStringLiteral("client_login_password")), m_passHash);
+        if (matches) {
+            m_loginAttemptsByIp.remove(s->peerAddress().toString());
             m_authed << s;
             ok(s);
         } else {

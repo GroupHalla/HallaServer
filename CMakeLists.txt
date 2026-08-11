@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(HallaServer VERSION 1.1.31 LANGUAGES CXX)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" HALLA_VERSION LIMIT_COUNT 1)
+string(STRIP "${HALLA_VERSION}" HALLA_VERSION)
+if (NOT HALLA_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR "VERSION inválida: '${HALLA_VERSION}'")
+endif()
+project(HallaServer VERSION ${HALLA_VERSION} LANGUAGES CXX)
+configure_file(src/Version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/Version.h" @ONLY)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,8 +29,9 @@ add_executable(halla-server
     src/ServerQuery.cpp
     src/ClientSession.cpp
     src/VoiceRelay.cpp
+    src/PasswordHash.cpp
 )
-target_include_directories(halla-server PRIVATE src shared)
+target_include_directories(halla-server PRIVATE src shared "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(halla-server PRIVATE ${QT_LIBS} OpenSSL::Crypto)
 
 # --- ferramenta de teste de protocolo (CLI) ---
@@ -32,9 +39,14 @@ add_executable(halla-nettest tools/nettest.cpp)
 target_include_directories(halla-nettest PRIVATE shared)
 target_link_libraries(halla-nettest PRIVATE ${QT_LIBS})
 
-set_target_properties(halla-server halla-nettest PROPERTIES
-    WIN32_EXECUTABLE FALSE
-    OUTPUT_NAME_DEBUG halla-server-d
-)
+set_target_properties(halla-server halla-nettest PROPERTIES WIN32_EXECUTABLE FALSE)
+set_target_properties(halla-server PROPERTIES OUTPUT_NAME_DEBUG halla-server-d)
+set_target_properties(halla-nettest PROPERTIES OUTPUT_NAME_DEBUG halla-nettest-d)
+
+enable_testing()
+add_executable(halla-selftest tests/selftest.cpp src/PasswordHash.cpp)
+target_include_directories(halla-selftest PRIVATE shared src)
+target_link_libraries(halla-selftest PRIVATE ${QT_LIBS} OpenSSL::Crypto)
+add_test(NAME halla-selftest COMMAND halla-selftest)
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)

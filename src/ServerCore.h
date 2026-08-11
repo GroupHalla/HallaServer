@@ -5,7 +5,10 @@
 #include <QMap>
 #include <QSet>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QByteArray>
+#include <QSslCertificate>
+#include <QSslKey>
 #include <QTimer>
 #include <QHostAddress>
 #include <QDateTime>
@@ -97,6 +100,9 @@ public:
     int screenshareFps() const              { return m_screenshareFps; }
     void setCertificateFile(const QString& f) { m_certFile = f; }
     void setPrivateKeyFile(const QString& f)  { m_keyFile = f; }
+    void setWebRtcIceServers(const QJsonArray& servers) { m_webRtcIceServers = servers; }
+    QSslCertificate tlsCertificate() const { return m_activeCertificate; }
+    QSslKey tlsPrivateKey() const { return m_activePrivateKey; }
 
     void log(const QString& msg);
     int clientCount() const { return m_clients.size(); }
@@ -124,7 +130,8 @@ public:
                       const std::function<void(class QTcpSocket*, int,
                                                const QString&)>& err);
 
-    ClientSession* clientByVoiceToken(quint32 token) { return m_byVoiceToken.value(token, nullptr); }
+    ClientSession* clientByVoiceToken(const QByteArray& token) { return m_byVoiceToken.value(token, nullptr); }
+    ClientSession* clientByLegacyVoiceToken(quint32 token) { return m_byLegacyVoiceToken.value(token, nullptr); }
     void relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload);
     void relayScreenShare(ClientSession* sender, quint16 seq, const QByteArray& payload);
     QJsonObject voiceStats() const;
@@ -167,11 +174,14 @@ private:
     QString m_dbPassword;
     QString m_certFile;
     QString m_keyFile;
+    QSslCertificate m_activeCertificate;
+    QSslKey m_activePrivateKey;
+    QJsonArray m_webRtcIceServers;
 
     QMap<int, ClientSession*> m_clients;
-    QMap<quint32, ClientSession*> m_byVoiceToken;
+    QMap<QByteArray, ClientSession*> m_byVoiceToken;
+    QMap<quint32, ClientSession*> m_byLegacyVoiceToken;
     int m_nextId = 1;
-    quint32 m_nextToken = 1;
 
     // canais em memória (persistidos em JSON)
     struct SvrChan {
@@ -303,6 +313,8 @@ private:
     void broadcast(const QJsonObject& obj, int exceptId = -1);
     void broadcastGroups();
     void sendWelcome(ClientSession* c);
+    void ensureVoiceToken(ClientSession* c);
+    void releaseVoiceToken(ClientSession* c);
     void doKick(ClientSession* c, const QString& reason, bool fromServer, bool ban, int minutes = 0);
     void registerClient(ClientSession* c);
     int channelOfUser(int userId) const;

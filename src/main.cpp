@@ -5,10 +5,14 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QTimer>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QHostAddress>
 #include <QTextStream>
 #include <csignal>
 #include "ServerCore.h"
 #include "ServerQuery.h"
+#include "Version.h"
 
 // Halla Server — servidor de voz/chat hospedável, compatível com o cliente Halla.
 // Uso:  halla-server [--config halla-server.ini] [--port 9987]
@@ -20,7 +24,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     g_app = &app;
     QCoreApplication::setApplicationName("Halla Server");
-    QCoreApplication::setApplicationVersion("1.1.31");
+    QCoreApplication::setApplicationVersion(QStringLiteral(HALLA_SERVER_VERSION));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -48,6 +52,9 @@ int main(int argc, char* argv[]) {
         configPath = QCoreApplication::applicationDirPath() + "/halla-server.ini";
 
     QSettings cfg(configPath, QSettings::IniFormat);
+#ifndef Q_OS_WIN
+    QFile::setPermissions(configPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
     cfg.beginGroup("server");
 
     const quint16 port = parser.isSet(portOpt)
@@ -59,10 +66,14 @@ int main(int argc, char* argv[]) {
     const QString motd = cfg.value("motd", "Bem-vindo ao servidor Halla!").toString();
     const int parsedMax = parser.isSet(maxOpt) ? parser.value(maxOpt).toInt() : 0;
     const int maxClients = (parsedMax <= 0) ? cfg.value("maxClients", 32).toInt() : parsedMax;
-    const QString password = parser.isSet(passOpt)
+    QString password = parser.isSet(passOpt)
             ? parser.value(passOpt)
             : cfg.value("password", "").toString();
-    const QString adminPassword = cfg.value("adminPassword", "").toString();
+    QString adminPassword = cfg.value("adminPassword", "").toString();
+    if (qEnvironmentVariableIsSet("HALLA_SERVER_PASSWORD"))
+        password = qEnvironmentVariable("HALLA_SERVER_PASSWORD");
+    if (qEnvironmentVariableIsSet("HALLA_ADMIN_PASSWORD"))
+        adminPassword = qEnvironmentVariable("HALLA_ADMIN_PASSWORD");
     QStringList privKeys = cfg.value("privilegeKeys").toStringList();
     for (QString& k : privKeys) k = k.trimmed();
     privKeys.removeAll(QString());
@@ -81,10 +92,35 @@ int main(int argc, char* argv[]) {
     const int dbPort = cfg.value("port", 3306).toInt();
     const QString dbName = cfg.value("name", "halla_db").toString();
     const QString dbUser = cfg.value("user", "root").toString();
-    const QString dbPassword = cfg.value("password", "").toString();
+    QString dbPassword = cfg.value("password", "").toString();
+    if (qEnvironmentVariableIsSet("HALLA_DATABASE_PASSWORD"))
+        dbPassword = qEnvironmentVariable("HALLA_DATABASE_PASSWORD");
     cfg.endGroup();
 
+    cfg.beginGroup("webrtc");
+    QStringList stunUrls = cfg.value("stunUrls", QStringLiteral("stun:stun.l.google.com:19302")).toStringList();
+    QString turnUrl = cfg.value("turnUrl").toString().trimmed();
+    QString turnUsername = cfg.value("turnUsername").toString();
+    QString turnPassword = cfg.value("turnPassword").toString();
+    cfg.endGroup();
+    if (qEnvironmentVariableIsSet("HALLA_TURN_URL")) turnUrl = qEnvironmentVariable("HALLA_TURN_URL").trimmed();
+    if (qEnvironmentVariableIsSet("HALLA_TURN_USERNAME")) turnUsername = qEnvironmentVariable("HALLA_TURN_USERNAME");
+    if (qEnvironmentVariableIsSet("HALLA_TURN_PASSWORD")) turnPassword = qEnvironmentVariable("HALLA_TURN_PASSWORD");
+    QJsonArray iceServers;
+    for (const QString& url : stunUrls) {
+        if (!url.trimmed().isEmpty()) iceServers.append(QJsonObject{{"urls", url.trimmed()}});
+    }
+    if (!turnUrl.isEmpty()) {
+        iceServers.append(QJsonObject{{"urls", turnUrl}, {"username", turnUsername},
+                                      {"credential", turnPassword}});
+    }
+
     const QString dir = QFileInfo(configPath).absolutePath();
+    if (adminPassword.compare(QStringLiteral("troque-esta-senha"), Qt::CaseInsensitive) == 0
+        || adminPassword.compare(QStringLiteral("changeme"), Qt::CaseInsensitive) == 0) {
+        QTextStream(stderr) << "FALHA: adminPassword usa um placeholder inseguro. Configure HALLA_ADMIN_PASSWORD ou deixe vazio." << Qt::endl;
+        return 2;
+    }
 
     ServerCore core;
     core.setServerName(name);
@@ -98,9 +134,10 @@ int main(int argc, char* argv[]) {
     core.setScreenshareWidth(ssWidth);
     core.setScreenshareHeight(ssHeight);
     core.setScreenshareFps(ssFps);
+    core.setWebRtcIceServers(iceServers);
     if (!certFile.trimmed().isEmpty()) core.setCertificateFile(QFileInfo(certFile).isRelative() ? dir + "/" + certFile : certFile);
     if (!keyFile.trimmed().isEmpty()) core.setPrivateKeyFile(QFileInfo(keyFile).isRelative() ? dir + "/" + keyFile : keyFile);
-    core.setVersion(QStringLiteral("1.1.31"));
+    core.setVersion(QStringLiteral(HALLA_SERVER_VERSION));
     core.setDataFile(dir + "/halla-data.json");
     core.setBanFile(dir + "/halla-bans.json");
     core.setDatabaseFile(dir + "/halla-data.db");
@@ -122,27 +159,31 @@ int main(int argc, char* argv[]) {
 
     // ---- ServerQuery (administração remota em texto, estilo Halla)
     cfg.beginGroup("query");
-    const quint16 queryPort = quint16(cfg.value("port", 10011).toUInt());
+    const quint16 queryPort = quint16(cfg.value("port", 0).toUInt());
+    const QHostAddress queryBind(cfg.value("bind", "127.0.0.1").toString());
     const QString queryUser = cfg.value("user", "serveradmin").toString();
     QString queryPass = cfg.value("password", "").toString();
     cfg.endGroup();
-    if (queryPass.isEmpty()) queryPass = core.queryPassword(); // persistida em halla-data.json
+    if (qEnvironmentVariableIsSet("HALLA_QUERY_PASSWORD"))
+        queryPass = qEnvironmentVariable("HALLA_QUERY_PASSWORD");
+    if (queryPass.isEmpty()) queryPass = core.queryPassword();
 
     if (queryPort > 0) {
         ServerQuery* query = new ServerQuery(&core, &app);
         query->setCredentials(queryUser, queryPass);
-        if (query->start(queryPort)) {
-            out << QStringLiteral("ServerQuery escutando na porta %1 (usuário: %2)\n")
-                       .arg(queryPort).arg(queryUser);
-            const QString finalPass = query->generatedPassword();
-            if (finalPass != queryPass) {
-                // primeira execução: mostra a senha gerada e a persiste
-                core.setQueryPassword(finalPass);
+        query->setTlsConfiguration(core.tlsCertificate(), core.tlsPrivateKey());
+        if (query->start(queryPort, queryBind.isNull() ? QHostAddress::LocalHost : queryBind)) {
+            out << QStringLiteral("ServerQuery TLS escutando em %1:%2 (usuário: %3)\n")
+                       .arg(queryBind.toString()).arg(queryPort).arg(queryUser);
+            const QString generatedPass = query->generatedPassword();
+            if (core.queryPassword() != query->passwordHashForStorage())
+                core.setQueryPassword(query->passwordHashForStorage());
+            if (!generatedPass.isEmpty()) {
                 out << QStringLiteral("=====================================================\n"
-                                      "  SENHA DO SERVERQUERY (guarde-a!): %1\n"
-                                      "  Ela fica salva em halla-data.json\n"
+                                      "  SENHA DO SERVERQUERY (mostrada uma única vez): %1\n"
+                                      "  Somente o hash PBKDF2 fica persistido.\n"
                                       "=====================================================\n")
-                           .arg(finalPass);
+                           .arg(generatedPass);
             }
         } else {
             out << QStringLiteral("FALHA: ServerQuery não pôde escutar na porta %1\n")

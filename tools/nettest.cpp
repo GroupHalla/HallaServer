@@ -315,7 +315,8 @@ int main(int argc, char* argv[]) {
     hello["proto"] = HProto::kProtoVersion;
     hello["uid"] = "uid-carol-000000000000000000=";
     hello["nick"] = "Carol";
-    hello["adminPass"] = "troque-esta-senha";
+    // Segurança: testes não carregam credencial administrativa conhecida.
+    // Use uma instância efêmera com permissões explícitas quando necessário.
     C.send(hello);
     QJsonObject wc = C.waitFor("welcome");
     C.id = wc["selfId"].toInt();

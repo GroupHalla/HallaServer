@@ -71,8 +71,13 @@ public:
         m_udpAddr = addr; m_udpPort = port; m_lastUdpSeen = QDateTime::currentDateTimeUtc();
     }
     void clearUdpEndpoint() { m_udpAddr = QHostAddress(); m_udpPort = 0; }
-    void setVoiceToken(quint32 token)       { m_voiceToken = token; }
-    quint32 voiceToken() const              { return m_voiceToken; }
+    void setProtocolVersion(int version)    { m_protocolVersion = version; }
+    int protocolVersion() const             { return m_protocolVersion; }
+    void setVoiceToken(const QByteArray& token) { m_voiceToken = token; }
+    QByteArray voiceToken() const           { return m_voiceToken; }
+    void setLegacyVoiceToken(quint32 token) { m_legacyVoiceToken = token; }
+    quint32 legacyVoiceToken() const        { return m_legacyVoiceToken; }
+    bool hasVoiceToken() const              { return !m_voiceToken.isEmpty() || m_legacyVoiceToken != 0; }
 
     // v3: sussurro (whisper) — conjunto de alvos; vazio = fala normal no canal
     QSet<int> whisperIds() const            { return m_whisperIds; }
@@ -130,7 +135,9 @@ private:
     bool m_screensharing = false;
     QHostAddress m_udpAddr;
     quint16 m_udpPort = 0;
-    quint32 m_voiceToken = 0;
+    int m_protocolVersion = 1;
+    QByteArray m_voiceToken;       // v4: token aleatório de 128 bits
+    quint32 m_legacyVoiceToken = 0; // v1-v3: compatibilidade temporária
     QSet<int> m_whisperIds;
     QString m_avatarHash;
     QDateTime m_connectedAt = QDateTime::currentDateTime();

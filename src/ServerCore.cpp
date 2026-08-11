@@ -2,6 +2,7 @@
 #include "ClientSession.h"
 #include "VoiceRelay.h"
 #include "HallaProtocol.h"
+#include "PasswordHash.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -20,6 +21,7 @@
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/pem.h>
+#include <openssl/rand.h>
 #include <QProcess>
 #include <algorithm>
 
@@ -126,7 +128,6 @@ static void messageRateLimitFor(const QString& type, int& maxEvents, int& window
 }
 
 ServerCore::ServerCore(QObject* parent) : QObject(parent) {
-    m_nextToken = 1024;
     m_idleTimer = new QTimer(this);
     m_idleTimer->setInterval(5000);
     connect(m_idleTimer, &QTimer::timeout, this, &ServerCore::checkIdleClients);
@@ -150,27 +151,46 @@ bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
     loadServerBanner();
     loadAvatars();
 
-    QString certPath = dataDir() + "/cert.pem";
-    QString keyPath = dataDir() + "/key.pem";
-    if (!QFile::exists(certPath) || !QFile::exists(keyPath)) {
-        log("Gerando certificado SSL autoassinado para o canal de controle...");
+    const bool customCertificate = !m_certFile.trimmed().isEmpty() || !m_keyFile.trimmed().isEmpty();
+    if (customCertificate && (m_certFile.trimmed().isEmpty() || m_keyFile.trimmed().isEmpty())) {
+        log("FALHA TLS: certFile e keyFile devem ser configurados juntos");
+        return false;
+    }
+    const QString certPath = customCertificate ? m_certFile : dataDir() + "/cert.pem";
+    const QString keyPath = customCertificate ? m_keyFile : dataDir() + "/key.pem";
+    if (!customCertificate && (!QFile::exists(certPath) || !QFile::exists(keyPath))) {
+        log("Gerando certificado TLS autoassinado para o canal de controle...");
+        QDir().mkpath(QFileInfo(certPath).absolutePath());
         QStringList args;
-        args << "req" << "-x509" << "-newkey" << "rsa:2048" << "-nodes"
+        args << "req" << "-x509" << "-newkey" << "rsa:3072" << "-nodes"
              << "-keyout" << keyPath << "-out" << certPath
-             << "-subj" << "/CN=HallaServer" << "-days" << "3650";
-        QProcess::execute("openssl", args);
+             << "-subj" << "/CN=HallaServer" << "-days" << "825";
+        const int result = QProcess::execute("openssl", args);
+        if (result != 0 || !QFile::exists(certPath) || !QFile::exists(keyPath)) {
+            log("FALHA TLS: openssl não conseguiu gerar cert.pem/key.pem");
+            return false;
+        }
+        QFile::setPermissions(keyPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     }
 
-    QSslCertificate cert;
-    QSslKey key;
     QFile certFile(certPath);
-    if (certFile.open(QIODevice::ReadOnly)) {
-        cert = QSslCertificate(&certFile, QSsl::Pem);
-    }
     QFile keyFile(keyPath);
-    if (keyFile.open(QIODevice::ReadOnly)) {
-        key = QSslKey(&keyFile, QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey);
+    if (!certFile.open(QIODevice::ReadOnly) || !keyFile.open(QIODevice::ReadOnly)) {
+        log(QStringLiteral("FALHA TLS: não foi possível abrir certificado/chave (%1, %2)")
+                .arg(certPath, keyPath));
+        return false;
     }
+    const QSslCertificate cert(&certFile, QSsl::Pem);
+    QByteArray keyPem = keyFile.readAll();
+    QSslKey key(keyPem, QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey);
+    if (key.isNull()) key = QSslKey(keyPem, QSsl::Ec, QSsl::Pem, QSsl::PrivateKey);
+    if (cert.isNull() || key.isNull()) {
+        log("FALHA TLS: certificado ou chave privada inválidos");
+        return false;
+    }
+    m_activeCertificate = cert;
+    m_activePrivateKey = key;
+    log(QStringLiteral("TLS: usando certificado %1").arg(certPath));
 
     SslServer* sslServer = new SslServer(this);
     sslServer->setSslConfig(cert, key);
@@ -557,7 +577,7 @@ void ServerCore::onClientDisconnected(ClientSession* client) {
         broadcast(left, client->id());
         removeFromChannels(client->id());
         m_clients.remove(client->id());
-        if (client->voiceToken()) m_byVoiceToken.remove(client->voiceToken());
+        releaseVoiceToken(client);
         log(QStringLiteral("Cliente #%1 (%2) desconectou").arg(client->id()).arg(client->name()));
     }
     client->deleteLater();
@@ -661,12 +681,15 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "move_other")  handleMoveOther(c, obj);
     else if (t == "commander")    handleCommander(c, obj);
     else if (t == "voice_hello") {
-        if (!c->voiceToken()) {
-            c->setVoiceToken(m_nextToken++);
-            m_byVoiceToken[c->voiceToken()] = c;
-        }
+        ensureVoiceToken(c);
         QJsonObject v = HProto::msg("voice_token");
-        v["token"] = QString::number(c->voiceToken());
+        if (c->protocolVersion() >= 4) {
+            v["token"] = QString::fromLatin1(c->voiceToken().toHex());
+            v["format"] = "hex128";
+        } else {
+            v["token"] = QString::number(c->legacyVoiceToken());
+            v["format"] = "u32";
+        }
         v["udp"] = m_voice ? m_voice->port() : 0;
         c->send(v);
     }
@@ -736,7 +759,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
         broadcast(left, c->id());
         removeFromChannels(c->id());
         m_clients.remove(c->id());
-        if (c->voiceToken()) m_byVoiceToken.remove(c->voiceToken());
+        releaseVoiceToken(c);
         log(QStringLiteral("Cliente #%1 (%2) saiu").arg(c->id()).arg(c->name()));
         c->closeAndDelete();
     }
@@ -784,7 +807,19 @@ void ServerCore::handleWebRtcSignal(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
+    if ((t == QLatin1String("webrtc_offer") || t == QLatin1String("webrtc_answer"))
+        && obj.value(QStringLiteral("sdp")).toString().size() > 256 * 1024) {
+        sendError(c, "webrtc_sdp_too_big", "SDP WebRTC excede 256 KiB");
+        return;
+    }
+    if (t == QLatin1String("webrtc_ice")
+        && obj.value(QStringLiteral("candidate")).toString().size() > 16 * 1024) {
+        sendError(c, "webrtc_ice_too_big", "ICE candidate excede 16 KiB");
+        return;
+    }
+
     QJsonObject out = obj;
+    out["iceServers"] = m_webRtcIceServers;
     out["from"] = c->id();
     out["fromName"] = c->name();
     out["to"] = target->id();
@@ -824,6 +859,8 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
         c->closeAndDelete();
         return;
     }
+    c->setProtocolVersion(clientProto);
+
     if (!validHumanText(nick, 30, false)) {
         sendError(c, "bad_nick", "Apelido inválido");
         c->closeAndDelete();
@@ -875,7 +912,7 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     }
 
     // senha do servidor
-    if (!m_password.isEmpty() && pass != m_password) {
+    if (!m_password.isEmpty() && !PasswordHash::verify(pass, m_password)) {
         sendError(c, "bad_password", "Senha do servidor incorreta");
         c->closeAndDelete();
         return;
@@ -910,7 +947,8 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     if (!m_groups.contains(gid)) gid = 2; // normal
     applyGroup(c, gid, false);
     // senha de administrador eleva a admin (mesmo com atribuição salva)
-    if (!adminPass.isEmpty() && adminPass == m_adminPassword && !m_adminPassword.isEmpty())
+    if (!adminPass.isEmpty() && !m_adminPassword.isEmpty()
+        && PasswordHash::verify(adminPass, m_adminPassword))
         applyGroup(c, 3, false);
 
     m_clients[c->id()] = c;
@@ -946,6 +984,40 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     moved["id"] = c->id();
     moved["channel"] = 1;
     broadcast(moved);
+}
+
+void ServerCore::ensureVoiceToken(ClientSession* c) {
+    if (!c || c->hasVoiceToken()) return;
+    if (c->protocolVersion() >= 4) {
+        QByteArray token(HProto::kVoiceTokenBytes, '\0');
+        do {
+            if (RAND_bytes(reinterpret_cast<unsigned char*>(token.data()), token.size()) != 1) {
+                token.clear();
+                break;
+            }
+        } while (m_byVoiceToken.contains(token));
+        if (!token.isEmpty()) {
+            c->setVoiceToken(token);
+            m_byVoiceToken[token] = c;
+        }
+    } else {
+        quint32 token = 0;
+        do {
+            if (RAND_bytes(reinterpret_cast<unsigned char*>(&token), sizeof(token)) != 1) {
+                token = QRandomGenerator::system()->generate();
+            }
+        } while (token == 0 || m_byLegacyVoiceToken.contains(token));
+        c->setLegacyVoiceToken(token);
+        m_byLegacyVoiceToken[token] = c;
+    }
+}
+
+void ServerCore::releaseVoiceToken(ClientSession* c) {
+    if (!c) return;
+    if (!c->voiceToken().isEmpty()) m_byVoiceToken.remove(c->voiceToken());
+    if (c->legacyVoiceToken()) m_byLegacyVoiceToken.remove(c->legacyVoiceToken());
+    c->setVoiceToken({});
+    c->setLegacyVoiceToken(0);
 }
 
 void ServerCore::sendWelcome(ClientSession* c) {
@@ -985,14 +1057,18 @@ void ServerCore::sendWelcome(ClientSession* c) {
     w["groups"] = groups;
     w["myPerms"] = myPermsOf(m_groups.value(c->groupId(), m_groups.value(1)));
 
-    if (!c->voiceToken()) {
-        c->setVoiceToken(m_nextToken++);
-        m_byVoiceToken[c->voiceToken()] = c;
-    }
+    ensureVoiceToken(c);
     QJsonObject voice;
     voice["udp"] = m_voice ? m_voice->port() : 0;
-    voice["token"] = QString::number(c->voiceToken());
+    if (c->protocolVersion() >= 4) {
+        voice["token"] = QString::fromLatin1(c->voiceToken().toHex());
+        voice["format"] = "hex128";
+    } else {
+        voice["token"] = QString::number(c->legacyVoiceToken());
+        voice["format"] = "u32";
+    }
     w["voice"] = voice;
+    w["iceServers"] = m_webRtcIceServers;
 
     // Chaves atuais dos canais aos quais o cliente precisa ter acesso chegam
     // dentro do welcome. Isso evita a corrida em que channel_key era enviado
@@ -1091,9 +1167,13 @@ void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     if (!ch.password.isEmpty() && !hasPerm(c, "ignoreChanPass")
-            && obj["pass"].toString() != ch.password) {
+            && !PasswordHash::verify(obj["pass"].toString(), ch.password)) {
         sendError(c, "bad_channel_pass", "Senha do canal incorreta");
         return;
+    }
+    if (!ch.password.isEmpty() && !PasswordHash::isEncoded(ch.password)) {
+        ch.password = PasswordHash::create(obj["pass"].toString());
+        saveData();
     }
 
     removeFromChannels(c->id());
@@ -1304,11 +1384,16 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     }
     ch.topic = obj["topic"].toString();
     ch.desc = obj["desc"].toString();
-    ch.password = obj["pass"].toString();
+    const QString channelPassword = obj["pass"].toString();
     if (!validOptionalText(ch.topic, 80, false)
             || !validOptionalText(ch.desc, 4096, true)
-            || !validOptionalText(ch.password, 128, false)) {
+            || !validOptionalText(channelPassword, 128, false)) {
         sendError(c, "bad_channel_fields", "Campos do canal inválidos");
+        return;
+    }
+    ch.password = channelPassword.isEmpty() ? QString() : PasswordHash::create(channelPassword);
+    if (!channelPassword.isEmpty() && ch.password.isEmpty()) {
+        sendError(c, "crypto_error", "Não foi possível proteger a senha do canal");
         return;
     }
     ch.def = false;
@@ -1480,7 +1565,8 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     if (obj.contains("pass")) {
         const QString pass = obj["pass"].toString();
         if (!validOptionalText(pass, 128, false)) { sendError(c, "bad_channel_fields", "Senha de canal inválida"); return; }
-        ch.password = pass;
+        ch.password = pass.isEmpty() ? QString() : PasswordHash::create(pass);
+        if (!pass.isEmpty() && ch.password.isEmpty()) { sendError(c, "crypto_error", "Não foi possível proteger a senha do canal"); return; }
     }
     if (obj.contains("moderated")) ch.moderated = obj["moderated"].toBool();
     if (obj.contains("ntalk")) ch.ntalk = qBound(0, obj["ntalk"].toInt(), 100);
@@ -1934,7 +2020,7 @@ void ServerCore::doKick(ClientSession* c, const QString& reason, bool fromServer
         left["reason"] = ban ? "banned" : "kicked";
         broadcast(left, c->id());
         m_clients.remove(c->id());
-        if (c->voiceToken()) m_byVoiceToken.remove(c->voiceToken());
+        releaseVoiceToken(c);
         c->closeAndDelete();
     }
 }
@@ -2180,11 +2266,13 @@ void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByt
     p.append(reinterpret_cast<const char*>(&seq), 2);
     p.append(payload);
 
+    const int sourceChannel = channelOfUser(sender->id());
     for (ClientSession* target : m_clients) {
-        if (target == sender) continue;
-        if (target->udpPort() > 0) {
-            m_voice->sendTo(target->udpAddress(), target->udpPort(), p);
-        }
+        if (target == sender || target->udpPort() == 0) continue;
+        const int targetChannel = channelOfUser(target->id());
+        if (sourceChannel <= 0 || targetChannel != sourceChannel) continue;
+        if (!hasChannelPerm(target, targetChannel, QStringLiteral("listen"))) continue;
+        m_voice->sendTo(target->udpAddress(), target->udpPort(), p);
     }
 }
 

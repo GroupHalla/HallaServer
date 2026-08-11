@@ -31,4 +31,5 @@ private:
     std::atomic<quint64> m_datagramsIn {0}, m_invalid {0}, m_unknownToken {0};
     std::atomic<quint64> m_opusFramesIn {0}, m_opusBytesIn {0};
     std::atomic<quint64> m_datagramsOut {0}, m_opusBytesOut {0}, m_sendErrors {0};
+    qint64 m_lastUnknownLogMs = 0;
 };

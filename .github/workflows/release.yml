@@ -17,10 +17,16 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate version/tag
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -ne "v$version") { throw "Tag/version mismatch" }
 
       - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:
           msystem: MINGW64
           path-type: inherit
@@ -36,10 +42,11 @@ jobs:
         run: |
           cmake -S . -B build -G "Ninja" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH="/mingw64" -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build Server
+      - name: Build and test Server
         shell: msys2 {0}
         run: |
           cmake --build build
+          ctest --test-dir build --output-on-failure
 
       - name: Prepare Package
         shell: msys2 {0}
@@ -77,15 +84,42 @@ jobs:
             done
           done
 
-      - name: Zip Windows Release
+      - name: Require Windows signing secrets for tagged releases
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          PFX: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: if (-not $env:PFX -or -not $env:PASSWORD) { throw "Windows signing secrets are required" }
+
+      - name: Sign Windows server when configured
+        shell: pwsh
+        env:
+          PFX: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
         run: |
-          Compress-Archive -Path dist/HallaServer/* -DestinationPath halla-server-${{ github.ref_name }}-win64.zip
+          if (-not $env:PFX) { Write-Host "Signing not configured for branch build"; exit 0 }
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\halla-signing.pfx", [Convert]::FromBase64String($env:PFX))
+          $timestamp = if ($env:TIMESTAMP_URL) { $env:TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+          signtool sign /fd SHA256 /td SHA256 /tr $timestamp /f "$env:RUNNER_TEMP\halla-signing.pfx" /p "$env:PASSWORD" dist\HallaServer\halla-server.exe
+          signtool verify /pa /v dist\HallaServer\halla-server.exe
+
+      - name: Zip Windows Release
+        shell: pwsh
+        run: |
+          $file = "halla-server-${{ github.ref_name }}-win64.zip"
+          Compress-Archive -Path dist/HallaServer/* -DestinationPath $file
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+          "$hash  $file" | Set-Content -Encoding ascii "$file.sha256"
 
       - name: Upload Windows Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: halla-server-windows
-          path: halla-server-${{ github.ref_name }}-win64.zip
+          path: |
+            halla-server-${{ github.ref_name }}-win64.zip
+            halla-server-${{ github.ref_name }}-win64.zip.sha256
 
   build-linux:
     name: Build Linux Server
@@ -93,7 +127,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Dependencies
         run: |
@@ -104,9 +138,25 @@ jobs:
         run: |
           cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build Server
+      - name: Build and test Server
         run: |
           cmake --build build
+          ctest --test-dir build --output-on-failure
+
+      - name: TLS startup integration smoke
+        run: |
+          set -euo pipefail
+          timeout 25s ./build/halla-server --config tests/halla-server-test.ini >server-smoke.log 2>&1 &
+          pid=$!
+          ready=0
+          for i in $(seq 1 20); do
+            if echo | openssl s_client -connect 127.0.0.1:19987 -servername HallaServer -brief >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          cat server-smoke.log
+          test "$ready" -eq 1
 
       - name: Prepare Package
         run: |
@@ -156,19 +206,22 @@ jobs:
           copy_runtime_deps halla-server-linux
           
           tar -czf halla-server-${{ github.ref_name }}-linux-x64.tar.gz halla-server-linux/
+          sha256sum halla-server-${{ github.ref_name }}-linux-x64.tar.gz > halla-server-${{ github.ref_name }}-linux-x64.tar.gz.sha256
 
       - name: Upload Linux Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: halla-server-linux
-          path: halla-server-${{ github.ref_name }}-linux-x64.tar.gz
+          path: |
+            halla-server-${{ github.ref_name }}-linux-x64.tar.gz
+            halla-server-${{ github.ref_name }}-linux-x64.tar.gz.sha256
 
   build-linux-arm64:
     name: Build Linux ARM64 Server
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -177,6 +230,7 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build
+          ctest --test-dir build --output-on-failure
       - name: Prepare ARM64 Package
         run: |
           mkdir -p halla-server-linux-arm64/sqldrivers
@@ -220,11 +274,14 @@ jobs:
           copy_runtime_deps halla-server-linux-arm64
           
           tar -czf halla-server-${{ github.ref_name }}-linux-arm64.tar.gz halla-server-linux-arm64/
+          sha256sum halla-server-${{ github.ref_name }}-linux-arm64.tar.gz > halla-server-${{ github.ref_name }}-linux-arm64.tar.gz.sha256
       - name: Upload ARM64 Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: halla-server-linux-arm64
-          path: halla-server-${{ github.ref_name }}-linux-arm64.tar.gz
+          path: |
+            halla-server-${{ github.ref_name }}-linux-arm64.tar.gz
+            halla-server-${{ github.ref_name }}-linux-arm64.tar.gz.sha256
 
   release:
     name: Create GitHub Release
@@ -234,53 +291,32 @@ jobs:
       contents: write
     steps:
       - name: Download Windows Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: halla-server-windows
 
       - name: Download Linux Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: halla-server-linux
       - name: Download Linux ARM64 Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: halla-server-linux-arm64
 
-      - name: Remover releases anteriores
-        if: startsWith(github.ref, 'refs/tags/') && github.ref_name == 'v1.0.0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          repo="GroupHalla/HallaServer"
-          current="${GITHUB_REF_NAME}"
-          for tag in $(gh release list --repo "$repo" --limit 100 --json tagName --jq '.[].tagName'); do
-            if [ "$tag" != "$current" ]; then
-              gh release delete "$tag" --repo "$repo" --cleanup-tag --yes
-            fi
-          done
-          if gh release view "$current" --repo "$repo" >/dev/null 2>&1; then
-            gh release delete "$current" --repo "$repo" --yes
-          fi
-
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Halla Server ${{ github.ref_name }}
           draft: false
           prerelease: false
+          generate_release_notes: true
           files: |
             halla-server-${{ github.ref_name }}-win64.zip
+            halla-server-${{ github.ref_name }}-win64.zip.sha256
             halla-server-${{ github.ref_name }}-linux-x64.tar.gz
+            halla-server-${{ github.ref_name }}-linux-x64.tar.gz.sha256
             halla-server-${{ github.ref_name }}-linux-arm64.tar.gz
-          body: |
-            ## Halla Server ${{ github.ref_name }}
-
-            ### WebRTC signaling
-            * Adiciona signaling WebRTC via TCP/TLS: stream_start/stop, watch_request/stop, offer, answer e ICE.
-            * Servidor valida mesmo canal e permissão antes de rotear mensagens entre transmissor e viewer.
-            * Base inicial para substituir o antigo screen share JPEG/UDP manual por WebRTC.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            halla-server-${{ github.ref_name }}-linux-arm64.tar.gz.sha256
