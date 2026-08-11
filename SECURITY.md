@@ -15,5 +15,6 @@ Prefer environment variables for secrets:
 - `HALLA_DATABASE_PASSWORD`, `HALLA_QUERY_PASSWORD`
 - `HALLA_TURN_URL`, `HALLA_TURN_USERNAME`, `HALLA_TURN_PASSWORD`
 
-Tagged Windows releases require `WINDOWS_SIGNING_PFX_BASE64` and
-`WINDOWS_SIGNING_PFX_PASSWORD`.
+Windows releases are currently allowed without Authenticode. When a trusted
+certificate becomes available, configure `WINDOWS_SIGNING_PFX_BASE64` and
+`WINDOWS_SIGNING_PFX_PASSWORD`; the existing workflow signs automatically.

@@ -84,14 +84,6 @@ jobs:
             done
           done
 
-      - name: Require Windows signing secrets for tagged releases
-        if: github.ref_type == 'tag'
-        shell: pwsh
-        env:
-          PFX: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
-          PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: if (-not $env:PFX -or -not $env:PASSWORD) { throw "Windows signing secrets are required" }
-
       - name: Sign Windows server when configured
         shell: pwsh
         env:
