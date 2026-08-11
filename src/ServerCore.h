@@ -222,6 +222,8 @@ private:
     QString filesDir(int chan) const;
     void loadAvatars();
     bool initDatabase();
+    bool ensureSqlConnection();
+    bool m_sqlSaveRetrying = false;
     void loadDataFromJson();
     void loadBansFromJson();
     void saveDataToSql();

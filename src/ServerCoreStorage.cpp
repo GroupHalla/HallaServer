@@ -306,6 +306,28 @@ void ServerCore::loadData() {
             .arg(m_channels.size()).arg(m_groups.size()).arg(m_registry.size()));
 }
 
+
+bool ServerCore::ensureSqlConnection() {
+    if (!QSqlDatabase::contains(QStringLiteral("HallaServerConnection"))) {
+        return initDatabase();
+    }
+    QSqlDatabase db = QSqlDatabase::database(QStringLiteral("HallaServerConnection"));
+    if (db.isOpen()) {
+        QSqlQuery ping(db);
+        if (m_dbType != QStringLiteral("mysql") || ping.exec(QStringLiteral("SELECT 1"))) {
+            return true;
+        }
+        log(QStringLiteral("SQL: conexão aparentemente caiu; tentando reconectar: %1").arg(ping.lastError().text()));
+    }
+    db.close();
+    if (!db.open()) {
+        log(QStringLiteral("SQL RECONNECT FAILED: %1").arg(db.lastError().text()));
+        return false;
+    }
+    log(QStringLiteral("SQL: conexão com banco restabelecida"));
+    return true;
+}
+
 bool ServerCore::initDatabase() {
     QSqlDatabase db;
     if (m_dbType == "mysql") {
@@ -611,13 +633,22 @@ void ServerCore::saveData() {
 }
 
 void ServerCore::saveDataToSql() {
-    QSqlDatabase db = QSqlDatabase::database("HallaServerConnection");
-    if (!db.isOpen()) {
-        log("SQL SAVE ERROR: Database is not open!");
+    if (!ensureSqlConnection()) {
+        log("SQL SAVE ERROR: Database is not open and reconnect failed!");
         return;
     }
+    QSqlDatabase db = QSqlDatabase::database("HallaServerConnection");
 
-    db.transaction();
+    if (!db.transaction()) {
+        log("SQL SAVE ERROR: could not start transaction: " + db.lastError().text());
+        if (!m_sqlSaveRetrying && m_dbType == QStringLiteral("mysql")) {
+            m_sqlSaveRetrying = true;
+            db.close();
+            if (ensureSqlConnection()) saveDataToSql();
+            m_sqlSaveRetrying = false;
+        }
+        return;
+    }
     QSqlQuery q(db);
 
     bool ok = true;
@@ -633,6 +664,14 @@ void ServerCore::saveDataToSql() {
     ok &= q.exec("DELETE FROM files");
     if (!ok) {
         log("SQL SAVE ERROR on DELETE: " + q.lastError().text());
+        db.rollback();
+        if (!m_sqlSaveRetrying && m_dbType == QStringLiteral("mysql")) {
+            m_sqlSaveRetrying = true;
+            db.close();
+            if (ensureSqlConnection()) saveDataToSql();
+            m_sqlSaveRetrying = false;
+        }
+        return;
     }
 
     q.prepare("INSERT INTO settings (`key`, `value`) VALUES (:key, :value)");
@@ -766,7 +805,15 @@ void ServerCore::saveDataToSql() {
 
     if (!db.commit()) {
         log("SQL SAVE TRANSACTION COMMIT FAILED: " + db.lastError().text());
+        db.rollback();
+        if (!m_sqlSaveRetrying && m_dbType == QStringLiteral("mysql")) {
+            m_sqlSaveRetrying = true;
+            db.close();
+            if (ensureSqlConnection()) saveDataToSql();
+            m_sqlSaveRetrying = false;
+        }
     } else {
+        m_sqlSaveRetrying = false;
         log("DEBUG: saveDataToSql concluído com sucesso e commitado!");
     }
 }
@@ -799,8 +846,8 @@ void ServerCore::saveBans() {
 }
 
 void ServerCore::saveBansToSql() {
+    if (!ensureSqlConnection()) return;
     QSqlDatabase db = QSqlDatabase::database("HallaServerConnection");
-    if (!db.isOpen()) return;
 
     db.transaction();
     QSqlQuery q(db);
