@@ -271,7 +271,7 @@ void ServerCore::loadData() {
         }
         
         if (savedKey.isEmpty()) {
-            // Gera uma nova chave segura estilo TS3
+            // Gera uma nova chave segura no formato Halla
             const QString chars = QStringLiteral("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
             savedKey = QStringLiteral("HL3-");
             for (int block = 0; block < 4; ++block) {

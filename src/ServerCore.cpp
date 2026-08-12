@@ -246,7 +246,7 @@ void ServerCore::setupBuiltinGroups() {
         {"talkPower", 25}
     };
     GroupDef admin;  admin.id = 3;  admin.name = "admin";
-    admin.position = 100;  // Nível mais alto (como "Admin" no Discord)
+    admin.position = 100;  // Nível administrativo mais alto
     admin.order = 0;       // Aparece em primeiro (menor índice)
     admin.perms = QJsonObject{
         {"*", true}, {"kick", true}, {"ban", true}, {"banList", true},
@@ -333,7 +333,7 @@ bool ServerCore::canManageClient(const ClientSession* executor, const ClientSess
     }
     
     // Pilar 1: O executor só pode gerenciar se sua posição for MAIOR que a do alvo
-    // (Igual também não pode - como no Discord, position igual = não pode)
+    // Posições iguais também impedem o gerenciamento do alvo
     int executorPos = clientPosition(executor);
     int targetPos = clientPosition(target);
     

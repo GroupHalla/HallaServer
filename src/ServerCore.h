@@ -48,7 +48,7 @@ struct GroupDef {
     QString name;
     QString sigla; // tag/abbreviation, e.g. "[Mod]"
     int order = 0; // sorting index/hierarchy order (for display)
-    int position = 0; // Pilar 1: posição hierárquica (quanto maior, mais autoridade) - Discord-style
+    int position = 0; // Pilar 1: posição hierárquica (quanto maior, mais autoridade)
     QString icon;  // icon identifier or index
     QJsonObject perms; // { "*":true } = tudo; chaves: kick, ban, banList, move,
                        // chanCreateTemp, chanCreateSemi, chanCreatePerm, chanEdit,
@@ -190,7 +190,7 @@ private:
         int type, codec, quality, maxClients;
         int bitrate = 96; // de 16kbps a 384kbps (padrão 96)
         int order = 0;    // posição relativa entre canais irmãos
-        // Pilar 3: Permissões exclusivas de canal (Discord-style Overrides)
+        // Pilar 3: permissões exclusivas de canal
         // GrupoOverride: { "groupId": { "permKey": state } } onde state é:
         //   1 = Allow (permite/força), 0 = Deny (nega/corta), -1 = Inherit (herda do servidor)
         QJsonObject groupPerms; // permissões de canais por cargo/grupo { "groupId": { "perm": state } }
@@ -300,7 +300,7 @@ private:
     int groupIdByName(const QString& name) const;
     void setupBuiltinGroups();
     
-    // Pilar 1: Hierarquia de Cargos (Discord-style position)
+    // Pilar 1: hierarquia de cargos
     int clientPosition(const ClientSession* c) const;
     bool canManageClient(const ClientSession* executor, const ClientSession* target) const;
     bool canManageGroup(int executorGroupId, int targetGroupId) const;
