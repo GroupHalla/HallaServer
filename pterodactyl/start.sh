@@ -5,7 +5,7 @@ echo "================================================================="
 echo "   Iniciando Halla Server - Pterodactyl Wrapper & Auto-Updater   "
 echo "================================================================="
 
-GITHUB_REPO="farleybarbosa320-oss/HallaServer"
+GITHUB_REPO="grouphalla/HallaServer"
 LOCAL_VER_FILE="version.txt"
 BINARY="./halla-server"
 
