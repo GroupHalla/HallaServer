@@ -1,4 +1,4 @@
-# Halla Server 1.1.33
+# Halla Server 1.1.34
 
 Servidor Qt para Halla Desktop 1.0.50+ e Halla Mobile 1.0.41+.
 

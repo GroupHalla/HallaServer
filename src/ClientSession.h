@@ -93,6 +93,8 @@ public:
 
     void setIdentityVerified(bool on) { m_identityVerified = on; }
     bool identityVerified() const { return m_identityVerified; }
+    void setAdminAuthenticated(bool on) { m_adminAuthenticated = on; }
+    bool adminAuthenticated() const { return m_adminAuthenticated; }
     void setPendingIdentity(const QJsonObject& hello, const QByteArray& pub, const QByteArray& nonce) {
         m_pendingIdentityHello = hello; m_pendingIdentityPub = pub; m_pendingIdentityNonce = nonce;
     }
@@ -145,6 +147,7 @@ private:
     QDateTime m_lastUdpSeen;
     QMap<QString, QList<qint64>> m_rateBuckets;
     bool m_identityVerified = false;
+    bool m_adminAuthenticated = false;
     QJsonObject m_pendingIdentityHello;
     QByteArray m_pendingIdentityPub;
     QByteArray m_pendingIdentityNonce;

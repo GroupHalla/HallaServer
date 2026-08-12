@@ -4,7 +4,7 @@
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.33, cliente desktop ≥ 1.0.50,
+> **Estado atual:** servidor Halla ≥ 1.1.34, cliente desktop ≥ 1.0.50,
 > mobile ≥ 1.0.41. A camada de segurança (TLS, identidade Ed25519, voz AEAD)
 > é **obrigatória** para todas as conexões — não é negociável por versão.
 
@@ -134,7 +134,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
   "selfId": 5,
   "proto": 4,
   "server": {
-    "name": "Servidor Halla", "motd": "…", "ver": "1.1.33",
+    "name": "Servidor Halla", "motd": "…", "ver": "1.1.34",
     "platform": "Linux", "maxClients": 32, "banner": "base64…",
     "screenshare": true, "screenshare_w": 800,
     "screenshare_h": 450, "screenshare_fps": 20
@@ -359,7 +359,14 @@ receber voz/sinalização WebRTC no canal; concedida por padrão).
 Regras especiais:
 - Não-administrador (`*`) não expulsa/bane administrador (`*`).
 - Não se remove `*` de um grupo que o possui (anti-lockout).
-- Só quem tem `*` cria/atribui grupos com `*`.
+- Só administrador total cria, edita ou atribui grupos com `*`.
+- `groupEdit` só gerencia cargos e clientes estritamente abaixo da maior
+  `position` do executor. O próprio cargo, posições iguais e cargos acima são
+  bloqueados na edição, exclusão e atribuição.
+- Um não-administrador não pode criar ou reposicionar cargo na própria altura
+  ou acima dela.
+- O nome `admin` é reservado ao grupo interno 3; nomes de cargo ou apelidos
+  nunca concedem permissões administrativas.
 - Grupos embutidos (1–3) não podem ser excluídos.
 - Extensões: `position` (posição hierárquica), `groupPerms` e
   `groupPositionReqs` por canal (allow/deny/inherit) e overrides de

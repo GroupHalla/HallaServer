@@ -301,9 +301,14 @@ private:
     void setupBuiltinGroups();
     
     // Pilar 1: hierarquia de cargos
+    QList<int> groupIdsForUid(const QString& uid) const;
+    int positionForUid(const QString& uid) const;
+    bool uidIsSuperAdmin(const QString& uid) const;
+    bool isSuperAdmin(const ClientSession* c) const;
     int clientPosition(const ClientSession* c) const;
     bool canManageClient(const ClientSession* executor, const ClientSession* target) const;
-    bool canManageGroup(int executorGroupId, int targetGroupId) const;
+    bool canManageUid(const ClientSession* executor, const QString& targetUid) const;
+    bool canManageGroup(const ClientSession* executor, int targetGroupId) const;
     
     // Pilar 3: Resolver permissão de canal com overrides (Allow/Deny/Inherit)
     int getChannelPermState(const ClientSession* c, int channelId, const QString& permKey) const;

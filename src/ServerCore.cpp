@@ -3,6 +3,7 @@
 #include "VoiceRelay.h"
 #include "HallaProtocol.h"
 #include "PasswordHash.h"
+#include "HierarchyPolicy.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -111,6 +112,10 @@ static bool validHumanText(const QString& s, int maxLen, bool allowNewline = fal
 
 static bool validOptionalText(const QString& s, int maxLen, bool allowNewline = false) {
     return s.size() <= maxLen && !containsBadControl(s, allowNewline);
+}
+
+static bool permissionEnabled(const QJsonValue& value) {
+    return value.toBool() || value.toInt(0) > 0;
 }
 
 static void messageRateLimitFor(const QString& type, int& maxEvents, int& windowMs) {
@@ -264,33 +269,49 @@ void ServerCore::setupBuiltinGroups() {
     m_groups[3] = admin;
 }
 
-bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
-    if (!c) return false;
-    
-    if (c->name() == QStringLiteral("serveradmin")) {
-        return true;
-    }
-    
-    if (m_privilegedUids.contains(c->uniqueId())) {
-        return true;
-    }
-
-    QList<int> gids = m_assignByUid.value(c->uniqueId());
+QList<int> ServerCore::groupIdsForUid(const QString& uid) const {
+    QList<int> gids = m_assignByUid.value(uid);
     if (gids.isEmpty()) {
         gids << 2;
     } else if (!gids.contains(1) && !gids.contains(2)) {
         gids.prepend(2);
     }
-    
-    for (int gid : gids) {
-        const GroupDef g = m_groups.value(gid, m_groups.value(1));
-        if (g.id == 3 || g.name.toLower() == "admin" || g.perms.value(QStringLiteral("*")).toBool()) {
-            return true;
-        }
-        const QJsonValue value = g.perms.value(QString::fromLatin1(key));
-        if (value.toBool() || value.toInt(0) > 0) {
-            return true;
-        }
+    return gids;
+}
+
+int ServerCore::positionForUid(const QString& uid) const {
+    int maxPos = 0;
+    for (int gid : groupIdsForUid(uid)) {
+        if (m_groups.contains(gid)) maxPos = qMax(maxPos, m_groups.value(gid).position);
+    }
+    return maxPos;
+}
+
+bool ServerCore::uidIsSuperAdmin(const QString& uid) const {
+    if (uid.isEmpty()) return false;
+    if (m_privilegedUids.contains(uid)) return true;
+    for (int gid : groupIdsForUid(uid)) {
+        if (!m_groups.contains(gid)) continue;
+        const GroupDef g = m_groups.value(gid);
+        if (g.id == 3 || permissionEnabled(g.perms.value(QStringLiteral("*")))) return true;
+    }
+    return false;
+}
+
+bool ServerCore::isSuperAdmin(const ClientSession* c) const {
+    if (!c) return false;
+    return c->adminAuthenticated() || c->groupId() == 3
+        || uidIsSuperAdmin(c->uniqueId());
+}
+
+bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
+    if (!c) return false;
+    if (isSuperAdmin(c)) return true;
+
+    for (int gid : groupIdsForUid(c->uniqueId())) {
+        if (!m_groups.contains(gid)) continue;
+        const QJsonValue value = m_groups.value(gid).perms.value(QString::fromLatin1(key));
+        if (value.toBool() || value.toInt(0) > 0) return true;
     }
     return false;
 }
@@ -298,62 +319,35 @@ bool ServerCore::hasPerm(const ClientSession* c, const char* key) const {
 // Pilar 1: Retorna a posição hierárquica do cliente (quanto maior, mais autoridade)
 int ServerCore::clientPosition(const ClientSession* c) const {
     if (!c) return 0;
-    QList<int> gids = m_assignByUid.value(c->uniqueId());
-    if (gids.isEmpty()) {
-        gids << 2;
-    } else if (!gids.contains(1) && !gids.contains(2)) {
-        gids.prepend(2);
-    }
-    int maxPos = 0;
-    for (int gid : gids) {
-        const GroupDef g = m_groups.value(gid, m_groups.value(1));
-        maxPos = qMax(maxPos, g.position);
-    }
-    return maxPos;
+    return qMax(c->groupPosition(), positionForUid(c->uniqueId()));
 }
 
-// Pilar 1: Verifica se executor pode gerenciar (kick/ban/edit) o alvo baseado na hierarquia
-// Regra: Só pode gerenciar quem está abaixo (position menor) - igual também não pode
+// Pilar 1: só é possível gerenciar clientes estritamente abaixo na hierarquia.
 bool ServerCore::canManageClient(const ClientSession* executor, const ClientSession* target) const {
     if (!executor || !target) return false;
-    
-    // Super-admin sempre pode
-    if (executor->groupId() == 3 || executor->group().toLower() == "admin" 
-        || executor->name() == QStringLiteral("serveradmin")) {
-        return true;
-    }
-    if (m_privilegedUids.contains(executor->uniqueId())) {
-        return true;
-    }
-    
-    // Alvo com privilégio individual ou super-admin não pode ser gerenciado por não-super-admin
-    if (m_privilegedUids.contains(target->uniqueId()) || target->groupId() == 3 
-        || target->group().toLower() == "admin" || target->name() == QStringLiteral("serveradmin")) {
-        return false;
-    }
-    
-    // Pilar 1: O executor só pode gerenciar se sua posição for MAIOR que a do alvo
-    // Posições iguais também impedem o gerenciamento do alvo
-    int executorPos = clientPosition(executor);
-    int targetPos = clientPosition(target);
-    
-    return executorPos > targetPos;
+    if (isSuperAdmin(executor)) return true;
+    if (isSuperAdmin(target)) return false;
+    return clientPosition(executor) > clientPosition(target);
 }
 
-// Pilar 1: Verifica se um grupo pode gerenciar outro grupo baseado no position
-bool ServerCore::canManageGroup(int executorGroupId, int targetGroupId) const {
-    if (executorGroupId <= 0 || targetGroupId <= 0) return false;
-    
-    GroupDef executorGroup = m_groups.value(executorGroupId);
-    GroupDef targetGroup = m_groups.value(targetGroupId);
-    
-    // Se executor é admin (id 3), pode gerenciar todos
-    if (executorGroup.id == 3 || executorGroup.name.toLower() == "admin") {
-        return true;
-    }
-    
-    // Regra de position: executor precisa ter position > target
-    return executorGroup.position > targetGroup.position;
+bool ServerCore::canManageUid(const ClientSession* executor, const QString& targetUid) const {
+    if (!executor || targetUid.isEmpty()) return false;
+    if (isSuperAdmin(executor)) return true;
+    if (uidIsSuperAdmin(targetUid)) return false;
+    return clientPosition(executor) > positionForUid(targetUid);
+}
+
+// groupEdit nunca permite editar, excluir ou atribuir um cargo de mesma
+// posição, acima do executor ou com acesso administrativo total.
+bool ServerCore::canManageGroup(const ClientSession* executor, int targetGroupId) const {
+    if (!executor || !m_groups.contains(targetGroupId)) return false;
+    const GroupDef target = m_groups.value(targetGroupId);
+    const bool targetIsSuperAdmin = target.id == 3
+        || permissionEnabled(target.perms.value(QStringLiteral("*")));
+    return HierarchyPolicy::canManageGroup(isSuperAdmin(executor),
+                                           clientPosition(executor),
+                                           targetIsSuperAdmin,
+                                           target.position);
 }
 
 // Pilar 3: Retorna o estado da permissão no canal (Allow=1, Deny=0, Inherit=-1, NotSet=-2)
@@ -412,11 +406,8 @@ int ServerCore::getChannelPermState(const ClientSession* c, int channelId, const
 bool ServerCore::hasEffectiveChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const {
     if (!c) return false;
     
-    // Bypass absoluto de administrador / serveradmin
-    if (m_privilegedUids.contains(c->uniqueId()) || c->groupId() == 3 
-        || c->group().toLower() == "admin" || c->name() == QStringLiteral("serveradmin")) {
-        return true;
-    }
+    // Administradores totais ignoram sobrescritas de canal.
+    if (isSuperAdmin(c)) return true;
     
     // Se o canal não existe, retorna true por padrão (usa permissões globais)
     if (!m_channels.contains(channelId)) return true;
@@ -946,10 +937,12 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
             .arg(nick, uid, QString::number(gid)));
     if (!m_groups.contains(gid)) gid = 2; // normal
     applyGroup(c, gid, false);
-    // senha de administrador eleva a admin (mesmo com atribuição salva)
+    // A senha administrativa concede acesso total somente durante esta sessão.
     if (!adminPass.isEmpty() && !m_adminPassword.isEmpty()
-        && PasswordHash::verify(adminPass, m_adminPassword))
+            && PasswordHash::verify(adminPass, m_adminPassword)) {
+        c->setAdminAuthenticated(true);
         applyGroup(c, 3, false);
+    }
 
     m_clients[c->id()] = c;
     addToChannel(c->id(), 1); // entra no canal padrão
@@ -1796,63 +1789,101 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "no_permission", "Sem permissão para gerenciar grupos");
         return;
     }
+
+    const bool superAdmin = isSuperAdmin(c);
+    const int executorPosition = clientPosition(c);
+    const int id = obj["id"].toInt(0);
     const QString name = obj["name"].toString().trimmed().left(30);
     const QJsonObject perms = obj["perms"].toObject();
 
+    auto validateName = [&](int groupId, const QString& proposedName) {
+        if (proposedName.isEmpty()) return true;
+        const bool usesAdminName = proposedName.compare(
+            QStringLiteral("admin"), Qt::CaseInsensitive) == 0;
+        if (!HierarchyPolicy::hasValidAdminIdentity(groupId == 3, usesAdminName)) {
+            sendError(c, groupId == 3 ? "locked" : "reserved_group",
+                      groupId == 3
+                          ? "O cargo administrativo interno não pode ser renomeado"
+                          : "O nome admin é reservado ao cargo administrativo interno");
+            return false;
+        }
+        const int duplicateId = groupIdByName(proposedName);
+        if (duplicateId > 0 && duplicateId != groupId) {
+            sendError(c, "group_exists", "Já existe um cargo com este nome");
+            return false;
+        }
+        return true;
+    };
+
+    if (obj.contains("perms") && permissionEnabled(perms.value(QStringLiteral("*"))) && !superAdmin) {
+        sendError(c, "no_permission", "Apenas administradores totais podem conceder a permissão *");
+        return;
+    }
+
     GroupDef g;
-    const int id = obj["id"].toInt(0);
     if (id > 0) {
-        // edição: name é opcional (permite mudar só permissões)
-        if (!m_groups.contains(id)) { sendError(c, "not_found", "Grupo não encontrado"); return; }
+        if (!m_groups.contains(id)) {
+            sendError(c, "not_found", "Grupo não encontrado");
+            return;
+        }
+        if (!canManageGroup(c, id)) {
+            sendError(c, "hierarchy", "Você só pode editar cargos estritamente abaixo do seu");
+            return;
+        }
+
         g = m_groups[id];
-        // proteção anti-lockout: não deixar remover "*" de grupo que tinha "*"
-        if (obj.contains("perms") && g.perms.value("*").toBool() && !perms.value("*").toBool()) {
+        if (obj.contains("name") && !name.isEmpty() && !validateName(id, name)) return;
+
+        // Proteção anti-lockout: nem o administrador total remove * de um
+        // cargo que já possui acesso administrativo total.
+        if (obj.contains("perms") && permissionEnabled(g.perms.value(QStringLiteral("*")))
+                && !permissionEnabled(perms.value(QStringLiteral("*")))) {
             sendError(c, "locked", "Não é possível remover a permissão total (*) deste grupo");
             return;
         }
+
+        const int requestedPosition = obj.contains("position")
+            ? obj["position"].toInt(0) : g.position;
+        if (!HierarchyPolicy::canSetGroupPosition(superAdmin, executorPosition, requestedPosition)) {
+            sendError(c, "hierarchy", "A posição do cargo deve permanecer estritamente abaixo da sua");
+            return;
+        }
+
         if (obj.contains("name") && !name.isEmpty()) g.name = name;
         if (obj.contains("perms")) g.perms = perms;
-        if (obj.contains("sigla")) g.sigla = obj["sigla"].toString();
+        if (obj.contains("sigla")) g.sigla = obj["sigla"].toString().left(30);
         if (obj.contains("order")) g.order = obj["order"].toInt(0);
-        if (obj.contains("icon")) g.icon = obj["icon"].toString();
-        // Pilar 1: position hierárquica
-        if (obj.contains("position")) g.position = obj["position"].toInt(0);
+        if (obj.contains("icon")) g.icon = obj["icon"].toString().left(128);
+        if (obj.contains("position")) g.position = requestedPosition;
         m_groups[id] = g;
     } else {
-        if (name.isEmpty()) return; // criação exige nome
+        if (name.isEmpty()) {
+            sendError(c, "bad_group", "A criação do cargo exige um nome");
+            return;
+        }
+        if (!validateName(0, name)) return;
+
         g.id = m_nextGroupId++;
         g.name = name;
         g.perms = perms;
-        g.sigla = obj["sigla"].toString();
+        g.sigla = obj["sigla"].toString().left(30);
         g.order = obj["order"].toInt(0);
-        g.icon = obj["icon"].toString();
-        // Pilar 1: position hierárquica (padrão baseado no próximo grupo)
+        g.icon = obj["icon"].toString().left(128);
         g.position = obj["position"].toInt(g.order * 10);
-        if (g.perms.value("*").toBool() && !hasPerm(c, "*")) {
-            sendError(c, "no_permission", "Apenas administradores (*) criam grupos com *");
+        if (!HierarchyPolicy::canSetGroupPosition(superAdmin, executorPosition, g.position)) {
+            sendError(c, "hierarchy", "O novo cargo deve ficar estritamente abaixo do seu");
             return;
         }
         m_groups[g.id] = g;
     }
+
     saveData();
-    // clientes com este grupo mudam de rótulo se as propriedades mudaram
-    for (ClientSession* o : m_clients)
-        if (o->groupId() == g.id) {
-            o->setGroup(g.name);
-            o->setSigla(g.sigla);
-            o->setIcon(g.icon);
-            o->setGroupOrder(g.order);
-            o->setGroupPosition(g.position);  // Pilar 1
-            QJsonObject m = HProto::msg("user_group");
-            m["id"] = o->id(); 
-            m["group"] = o->group(); 
-            m["gid"] = g.id;
-            m["sigla"] = g.sigla;
-            m["icon"] = g.icon;
-            m["order"] = g.order;
-            m["position"] = g.position;  // Pilar 1
-            broadcast(m);
-        }
+    // Recalcula todos os cargos dos clientes afetados, inclusive usuários com
+    // múltiplos cargos, antes de anunciar a alteração.
+    for (ClientSession* online : m_clients) {
+        if (online->groupId() == g.id || groupIdsForUid(online->uniqueId()).contains(g.id))
+            applyGroup(online, 0, true);
+    }
     broadcastGroups();
     log(QStringLiteral("Grupo \"%1\" (#%2) %3 por %4")
             .arg(g.name).arg(g.id).arg(id > 0 ? "atualizado" : "criado", c->name()));
@@ -1866,6 +1897,10 @@ void ServerCore::handleGroupDelete(ClientSession* c, const QJsonObject& obj) {
     const int id = obj["id"].toInt();
     if (id < 100 || !m_groups.contains(id)) {
         sendError(c, "locked", "Grupos internos não podem ser excluídos");
+        return;
+    }
+    if (!canManageGroup(c, id)) {
+        sendError(c, "hierarchy", "Você só pode excluir cargos estritamente abaixo do seu");
         return;
     }
     m_groups.remove(id);
@@ -1890,55 +1925,61 @@ void ServerCore::handleClientSetGroup(ClientSession* c, const QJsonObject& obj) 
         sendError(c, "no_permission", "Sem permissão para atribuir grupos");
         return;
     }
+
     const int gid = obj["gid"].toInt();
-    if (!m_groups.contains(gid)) { sendError(c, "not_found", "Grupo não encontrado"); return; }
-    // só super-admin (*) eleva outros ao grupo *
-    if (m_groups[gid].perms.value("*").toBool() && !hasPerm(c, "*")) {
-        sendError(c, "no_permission", "Apenas administradores (*) atribuem este grupo");
+    if (!m_groups.contains(gid)) {
+        sendError(c, "not_found", "Grupo não encontrado");
+        return;
+    }
+    if (!canManageGroup(c, gid)) {
+        sendError(c, "hierarchy", "Você só pode atribuir cargos estritamente abaixo do seu");
         return;
     }
 
-    // alvo por id online ou por uid offline
+    // Alvo por ID online ou UID persistente. Além do cargo escolhido, o alvo
+    // também precisa estar estritamente abaixo do executor.
+    ClientSession* onlineTarget = nullptr;
     QString targetUid = obj["uid"].toString();
     if (obj.contains("id")) {
-        const int cid = obj["id"].toInt();
-        if (!m_clients.contains(cid)) return;
-        ClientSession* t = m_clients[cid];
-        targetUid = t->uniqueId();
-    } else if (m_registry.contains(targetUid)) {
-        // offline: só persiste
-    } else if (targetUid.isEmpty()) {
+        const int clientId = obj["id"].toInt();
+        onlineTarget = m_clients.value(clientId, nullptr);
+        if (!onlineTarget) {
+            sendError(c, "not_found", "Cliente não encontrado");
+            return;
+        }
+        targetUid = onlineTarget->uniqueId();
+    }
+    if (targetUid.isEmpty()) {
+        sendError(c, "not_found", "Identidade do cliente não encontrada");
         return;
     }
-    if (!targetUid.isEmpty()) {
-        QList<int>& list = m_assignByUid[targetUid];
-        if (list.contains(gid)) {
-            if (list.size() > 1) {
-                list.removeAll(gid);
-            } else if (gid != 2) {
-                list.clear();
-                list << 2;
-            }
-        } else {
-            // Remove o cargo "normal" se o usuário estiver ganhando outro cargo que não seja ele,
-            // ou apenas adicione. Vamos apenas adicionar para que eles possam ter múltiplos cargos!
-            list << gid;
-        }
-        
-        // Aplica o novo estado ao cliente online se conectado
-        if (obj.contains("id")) {
-            const int cid = obj["id"].toInt();
-            if (m_clients.contains(cid)) {
-                ClientSession* t = m_clients[cid];
-                applyGroup(t, 0, true);
-            }
-        }
-        
-        saveData();
-        log(QStringLiteral("%1 alterou cargos do UID %2: %3")
-                .arg(c->name(), targetUid.left(16), QString::number(gid)));
-        broadcastGroups();
+
+    const bool canManageTarget = onlineTarget
+        ? canManageClient(c, onlineTarget)
+        : canManageUid(c, targetUid);
+    if (!canManageTarget) {
+        sendError(c, "hierarchy", "Você não pode alterar cargos deste cliente");
+        return;
     }
+
+    QList<int>& list = m_assignByUid[targetUid];
+    if (list.contains(gid)) {
+        if (list.size() > 1) {
+            list.removeAll(gid);
+        } else if (gid != 2) {
+            list.clear();
+            list << 2;
+        }
+    } else {
+        list << gid;
+    }
+
+    if (onlineTarget) applyGroup(onlineTarget, 0, true);
+
+    saveData();
+    log(QStringLiteral("%1 alterou cargos do UID %2: %3")
+            .arg(c->name(), targetUid.left(16), QString::number(gid)));
+    broadcastGroups();
 }
 
 void ServerCore::handleServerEdit(ClientSession* c, const QJsonObject& obj) {
