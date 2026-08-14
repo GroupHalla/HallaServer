@@ -6,6 +6,7 @@
 #include "HierarchyPolicy.h"
 #include "EffectiveGroupDisplay.h"
 #include "GroupMemberList.h"
+#include "TlsCertificate.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -25,7 +26,6 @@
 #include <openssl/x509.h>
 #include <openssl/pem.h>
 #include <openssl/rand.h>
-#include <QProcess>
 #include <algorithm>
 
 class SslServer : public QTcpServer {
@@ -168,16 +168,12 @@ bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
     if (!customCertificate && (!QFile::exists(certPath) || !QFile::exists(keyPath))) {
         log("Gerando certificado TLS autoassinado para o canal de controle...");
         QDir().mkpath(QFileInfo(certPath).absolutePath());
-        QStringList args;
-        args << "req" << "-x509" << "-newkey" << "rsa:3072" << "-nodes"
-             << "-keyout" << keyPath << "-out" << certPath
-             << "-subj" << "/CN=HallaServer" << "-days" << "825";
-        const int result = QProcess::execute("openssl", args);
-        if (result != 0 || !QFile::exists(certPath) || !QFile::exists(keyPath)) {
-            log("FALHA TLS: openssl não conseguiu gerar cert.pem/key.pem");
+        QString certificateError;
+        if (!TlsCertificate::generateSelfSigned(certPath, keyPath, &certificateError)) {
+            log(QStringLiteral("FALHA TLS: não foi possível gerar cert.pem/key.pem: %1")
+                    .arg(certificateError));
             return false;
         }
-        QFile::setPermissions(keyPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     }
 
     QFile certFile(certPath);

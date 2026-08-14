@@ -23,8 +23,10 @@ pessoa possa implementar clientes, bots e ferramentas compatíveis.
 ### TLS no canal de controle
 
 - O servidor escuta apenas TLS (`QSslServer`). Na primeira execução sem
-  certificado configurado, gera `cert.pem`/`key.pem` **autoassinados**.
-  Certificado próprio (ex.: Let's Encrypt) via `certFile`/`keyFile` no INI.
+  certificado configurado, gera `cert.pem`/`key.pem` **autoassinados**
+  diretamente com a `libcrypto` carregada, sem executar o comando externo
+  `/usr/bin/openssl`. Certificado próprio (ex.: Let's Encrypt) via
+  `certFile`/`keyFile` no INI.
 - Clientes usam **TOFU (trust on first use)**: salvam o fingerprint
   SHA-256 do certificado na primeira conexão; se o fingerprint mudar,
   a conexão é recusada com alerta de possível MITM.

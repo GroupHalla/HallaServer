@@ -3,9 +3,14 @@
 #include "HierarchyPolicy.h"
 #include "EffectiveGroupDisplay.h"
 #include "GroupMemberList.h"
+#include "TlsCertificate.h"
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFile>
+#include <QSslCertificate>
+#include <QSslKey>
+#include <QTemporaryDir>
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
@@ -62,6 +67,29 @@ int main(int argc, char** argv) {
     if (!onlineMember.value(QStringLiteral("online")).toBool()) return 61;
     if (onlineMember.value(QStringLiteral("id")).toInt() != 77) return 62;
     if (onlineMember.value(QStringLiteral("name")).toString() != QStringLiteral("Nome atual")) return 63;
+
+    // A primeira inicialização em Pterodactyl não pode depender do executável
+    // /usr/bin/openssl, pois LD_LIBRARY_PATH aponta para as libs do pacote.
+    QTemporaryDir tlsDirectory;
+    if (!tlsDirectory.isValid()) return 70;
+    const QString certificatePath = tlsDirectory.filePath(QStringLiteral("cert.pem"));
+    const QString privateKeyPath = tlsDirectory.filePath(QStringLiteral("key.pem"));
+    QString certificateError;
+    if (!TlsCertificate::generateSelfSigned(certificatePath, privateKeyPath,
+                                            &certificateError)) {
+        qWarning() << certificateError;
+        return 71;
+    }
+    QFile certificateFile(certificatePath);
+    QFile privateKeyFile(privateKeyPath);
+    if (!certificateFile.open(QIODevice::ReadOnly)
+            || !privateKeyFile.open(QIODevice::ReadOnly)) return 72;
+    const QSslCertificate generatedCertificate(&certificateFile, QSsl::Pem);
+    const QSslKey generatedKey(privateKeyFile.readAll(), QSsl::Rsa, QSsl::Pem,
+                               QSsl::PrivateKey);
+    if (generatedCertificate.isNull() || generatedKey.isNull()) return 73;
+    if (generatedCertificate.subjectInfo(QSslCertificate::CommonName)
+            != QStringList{QStringLiteral("HallaServer")}) return 74;
 
     qInfo() << "HallaServer self-test OK";
     return 0;

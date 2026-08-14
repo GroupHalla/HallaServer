@@ -30,6 +30,7 @@ add_executable(halla-server
     src/ClientSession.cpp
     src/VoiceRelay.cpp
     src/PasswordHash.cpp
+    src/TlsCertificate.cpp
 )
 target_include_directories(halla-server PRIVATE src shared "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(halla-server PRIVATE ${QT_LIBS} OpenSSL::Crypto)
@@ -44,7 +45,7 @@ set_target_properties(halla-server PROPERTIES OUTPUT_NAME_DEBUG halla-server-d)
 set_target_properties(halla-nettest PROPERTIES OUTPUT_NAME_DEBUG halla-nettest-d)
 
 enable_testing()
-add_executable(halla-selftest tests/selftest.cpp src/PasswordHash.cpp)
+add_executable(halla-selftest tests/selftest.cpp src/PasswordHash.cpp src/TlsCertificate.cpp)
 target_include_directories(halla-selftest PRIVATE shared src)
 target_link_libraries(halla-selftest PRIVATE ${QT_LIBS} OpenSSL::Crypto)
 add_test(NAME halla-selftest COMMAND halla-selftest)
