@@ -6,6 +6,7 @@
 #include "HierarchyPolicy.h"
 #include "EffectiveGroupDisplay.h"
 #include "GroupMemberList.h"
+#include "GroupAssignmentPolicy.h"
 #include "TlsCertificate.h"
 
 #include <QFile>
@@ -1975,17 +1976,15 @@ void ServerCore::handleClientSetGroup(ClientSession* c, const QJsonObject& obj) 
         return;
     }
 
-    QList<int>& list = m_assignByUid[targetUid];
-    if (list.contains(gid)) {
-        if (list.size() > 1) {
-            list.removeAll(gid);
-        } else if (gid != 2) {
-            list.clear();
-            list << 2;
-        }
-    } else {
-        list << gid;
+    const QString operation = obj["op"].toString(QStringLiteral("toggle")).toLower();
+    if (operation != QLatin1String("add")
+            && operation != QLatin1String("remove")
+            && operation != QLatin1String("toggle")) {
+        sendError(c, "bad_group_operation", "Operação de atribuição de cargo inválida");
+        return;
     }
+    QList<int>& list = m_assignByUid[targetUid];
+    GroupAssignmentPolicy::apply(list, gid, operation);
 
     if (onlineTarget) applyGroup(onlineTarget, 0, true);
 

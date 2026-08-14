@@ -219,7 +219,7 @@ A `position` hierárquica continua independente e não é desativada por essa op
 | `group_list` | — | Lista grupos e permissões |
 | `group_set` | `id?`,`name?`,`perms?`,`sigla?`,`siglaAfter?`,`order?`,`orderEnabled?`,`icon?`,`position?` | Criar/editar grupo (perm `groupEdit`) |
 | `group_delete` | `id` | Excluir grupo custom (id ≥ 100) |
-| `client_set_group` | `id?` ou `uid?`, `gid` | Atribuir grupo persistente por UID |
+| `client_set_group` | `id?` ou `uid?`, `gid`, `op?` (`add`/`remove`; ausente = toggle legado) | Adicionar ou remover cargo persistente por UID |
 | `server_edit` | `name?`,`motd?`,`banner?` (base64; vazio remove) | Editar servidor (perm `serverEdit`) |
 | `avatar_set` | `data` (base64 ≤ 128 KiB; vazio remove) | Definir avatar |
 | `avatar_get` | `uid` | Pedir avatar de um cliente |

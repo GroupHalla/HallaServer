@@ -3,6 +3,7 @@
 #include "HierarchyPolicy.h"
 #include "EffectiveGroupDisplay.h"
 #include "GroupMemberList.h"
+#include "GroupAssignmentPolicy.h"
 #include "TlsCertificate.h"
 
 #include <QCoreApplication>
@@ -90,6 +91,18 @@ int main(int argc, char** argv) {
     if (generatedCertificate.isNull() || generatedKey.isNull()) return 73;
     if (generatedCertificate.subjectInfo(QSslCertificate::CommonName)
             != QStringList{QStringLiteral("HallaServer")}) return 74;
+
+    QList<int> assignments{3};
+    GroupAssignmentPolicy::apply(assignments, 3, QStringLiteral("remove"));
+    if (assignments != QList<int>{2}) return 80; // remover o próprio Admin
+    GroupAssignmentPolicy::apply(assignments, 100, QStringLiteral("add"));
+    GroupAssignmentPolicy::apply(assignments, 100, QStringLiteral("add"));
+    if (assignments != QList<int>{2, 100}) return 81; // add idempotente
+    GroupAssignmentPolicy::apply(assignments, 100, QStringLiteral("remove"));
+    if (assignments != QList<int>{2}) return 82;
+    GroupAssignmentPolicy::apply(assignments, 101, QStringLiteral("toggle"));
+    GroupAssignmentPolicy::apply(assignments, 101, QStringLiteral("toggle"));
+    if (assignments != QList<int>{2}) return 83; // compatibilidade legada
 
     qInfo() << "HallaServer self-test OK";
     return 0;
