@@ -1893,6 +1893,15 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
             applyGroup(online, 0, true);
     }
     broadcastGroups();
+
+    // Confirma diretamente ao editor que as propriedades foram aplicadas.
+    // A confirmação é enviada depois do broadcast para ser a última palavra
+    // sobre os valores persistidos, evitando que uma reconstrução da lista
+    // restaure os controles visuais para os padrões anteriores.
+    QJsonObject confirmed = HProto::msg("group_set_ok");
+    confirmed["group"] = groupToJson(g);
+    c->send(confirmed);
+
     log(QStringLiteral("Grupo \"%1\" (#%2) %3 por %4")
             .arg(g.name).arg(g.id).arg(id > 0 ? "atualizado" : "criado", c->name()));
 }

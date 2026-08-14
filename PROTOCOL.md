@@ -266,6 +266,7 @@ A `position` hierárquica continua independente e não é desativada por essa op
 | `banlist` | `bans:[{uid,ip,name,reason,expires?}]` | Lista de banimentos |
 | `ban_removed` | `uid` | Banimento removido |
 | `group_list` | `groups:[…]` | Broadcast quando grupos mudam |
+| `group_set_ok` | `group:{…}` | Confirma ao editor os valores efetivamente aplicados ao cargo |
 | `server_edit` | `name`,`motd`,`banner?` | Servidor renomeado/MOTD/banner mudou |
 | `whisper_ok` | `count` | Sussurro ativado para N usuários |
 | `ft_uploaded` / `ft_list` / `ft_data` / `ft_deleted` | — | Transferência de arquivos |
