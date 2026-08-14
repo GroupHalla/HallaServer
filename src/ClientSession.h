@@ -27,8 +27,10 @@ public:
     QString group() const { return m_group; }
     int groupId() const { return m_groupId; }
     QString sigla() const { return m_sigla; }
+    QString siglaSuffix() const { return m_siglaSuffix; }
     QString icon() const { return m_icon; }
     int groupOrder() const { return m_groupOrder; }
+    bool groupOrderEnabled() const { return m_groupOrderEnabled; }
     int groupPosition() const { return m_groupPosition; }  // Pilar 1: posição hierárquica
     QHostAddress ip() const;
 
@@ -57,8 +59,10 @@ public:
     void setGroup(const QString& g)         { m_group = g; }
     void setGroupId(int g)                  { m_groupId = g; }
     void setSigla(const QString& s)         { m_sigla = s; }
+    void setSiglaSuffix(const QString& s)   { m_siglaSuffix = s; }
     void setIcon(const QString& i)          { m_icon = i; }
     void setGroupOrder(int o)               { m_groupOrder = o; }
+    void setGroupOrderEnabled(bool enabled) { m_groupOrderEnabled = enabled; }
     void setGroupPosition(int p)            { m_groupPosition = p; }  // Pilar 1
     void setMicMuted(bool v)                { m_micMuted = v; }
     void setSpkMuted(bool v)                { m_spkMuted = v; }
@@ -125,8 +129,10 @@ private:
     QString m_group = "normal";
     int m_groupId = 2;
     QString m_sigla;
+    QString m_siglaSuffix;
     QString m_icon;
     int m_groupOrder = 0;
+    bool m_groupOrderEnabled = true;
     int m_groupPosition = 0;  // Pilar 1: posição hierárquica do grupo
     bool m_micMuted = false;
     bool m_spkMuted = false;

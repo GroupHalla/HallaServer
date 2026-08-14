@@ -4,6 +4,8 @@
 #include "HallaProtocol.h"
 #include "PasswordHash.h"
 #include "HierarchyPolicy.h"
+#include "EffectiveGroupDisplay.h"
+#include "GroupMemberList.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -457,7 +459,9 @@ QJsonObject ServerCore::groupToJson(const GroupDef& g) const {
     o["name"] = g.name;
     o["perms"] = g.perms;
     o["sigla"] = g.sigla;
+    o["siglaAfter"] = g.siglaAfter;
     o["order"] = g.order;
+    o["orderEnabled"] = g.orderEnabled;
     o["icon"] = g.icon;
     o["position"] = g.position;  // Pilar 1: posição hierárquica
     return o;
@@ -493,25 +497,28 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     c->setGroupId(primaryGid);
     
     QStringList names;
-    QStringList siglas;
+    QList<AssignedGroupDisplay> assignedDisplays;
     int maxPos = 0;
-    int minOrder = 9999;
     QString firstIcon;
     
     for (int gid : validIds) {
         const GroupDef& g = m_groups[gid];
         QString nameWithIcon = g.icon.isEmpty() ? g.name : g.icon + QStringLiteral(" ") + g.name;
         names << nameWithIcon;
-        if (!g.sigla.isEmpty()) siglas << g.sigla;
+        assignedDisplays << AssignedGroupDisplay{g.sigla, g.order, g.siglaAfter, g.orderEnabled};
         maxPos = qMax(maxPos, g.position);
-        minOrder = qMin(minOrder, g.order);
         if (firstIcon.isEmpty() && !g.icon.isEmpty()) firstIcon = g.icon;
     }
-    
+
+    // A posição hierárquica continua controlando autoridade. A ordem abaixo é
+    // somente visual e ignora cargos cujo uso na lista foi desativado.
+    const EffectiveGroupDisplay display = effectiveGroupDisplay(assignedDisplays);
     c->setGroup(names.join(QStringLiteral("\n")));
-    c->setSigla(siglas.join(QStringLiteral(" ")));
+    c->setSigla(display.prefixSigla);
+    c->setSiglaSuffix(display.suffixSigla);
     c->setIcon(firstIcon);
-    c->setGroupOrder(minOrder);
+    c->setGroupOrder(display.order);
+    c->setGroupOrderEnabled(display.orderEnabled);
     c->setGroupPosition(maxPos);
     
     if (announce) {
@@ -520,8 +527,10 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         m["group"] = c->group();
         m["gid"] = primaryGid;
         m["sigla"] = c->sigla();
+        m["siglaSuffix"] = c->siglaSuffix();
         m["icon"] = c->icon();
-        m["order"] = minOrder;
+        m["order"] = display.order;
+        m["orderEnabled"] = display.orderEnabled;
         m["position"] = maxPos;
         broadcast(m);
     }
@@ -1757,6 +1766,9 @@ void ServerCore::handleGroupList(ClientSession* c) {
             member["online"] = false;
             members << member;
         }
+        // O registro persistente acima começa como offline. Uma sessão ativa
+        // com a mesma UID deve substituir esse estado, não ser descartada como
+        // uma duplicata.
         for (ClientSession* online : m_clients) {
             QList<int> assigned = m_assignByUid.value(online->uniqueId());
             if (assigned.isEmpty()) {
@@ -1764,18 +1776,10 @@ void ServerCore::handleGroupList(ClientSession* c) {
             } else if (!assigned.contains(1) && !assigned.contains(2)) {
                 assigned.prepend(2);
             }
-            bool hasGroup = assigned.contains(g.id);
-            if (!hasGroup) continue;
-            bool already = false;
-            for (const QJsonValue& v : members)
-                if (v.toObject().value("uid").toString() == online->uniqueId()) already = true;
-            if (already) continue;
-            QJsonObject member;
-            member["id"] = online->id();
-            member["uid"] = online->uniqueId();
-            member["name"] = online->name();
-            member["online"] = true;
-            members << member;
+            if (!assigned.contains(g.id)) continue;
+
+            upsertOnlineGroupMember(members, online->id(),
+                                    online->uniqueId(), online->name());
         }
         group["members"] = members;
         arr << group;
@@ -1852,7 +1856,9 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         if (obj.contains("name") && !name.isEmpty()) g.name = name;
         if (obj.contains("perms")) g.perms = perms;
         if (obj.contains("sigla")) g.sigla = obj["sigla"].toString().left(30);
+        if (obj.contains("siglaAfter")) g.siglaAfter = obj["siglaAfter"].toBool(false);
         if (obj.contains("order")) g.order = obj["order"].toInt(0);
+        if (obj.contains("orderEnabled")) g.orderEnabled = obj["orderEnabled"].toBool(true);
         if (obj.contains("icon")) g.icon = obj["icon"].toString().left(128);
         if (obj.contains("position")) g.position = requestedPosition;
         m_groups[id] = g;
@@ -1867,7 +1873,9 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         g.name = name;
         g.perms = perms;
         g.sigla = obj["sigla"].toString().left(30);
+        g.siglaAfter = obj["siglaAfter"].toBool(false);
         g.order = obj["order"].toInt(0);
+        g.orderEnabled = obj["orderEnabled"].toBool(true);
         g.icon = obj["icon"].toString().left(128);
         g.position = obj["position"].toInt(g.order * 10);
         if (!HierarchyPolicy::canSetGroupPosition(superAdmin, executorPosition, g.position)) {

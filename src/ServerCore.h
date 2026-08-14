@@ -54,6 +54,8 @@ struct GroupDef {
                        // chanCreateTemp, chanCreateSemi, chanCreatePerm, chanEdit,
                        // chanDelete, serverEdit, groupEdit, poke, privmsg,
                        // ignoreChanPass, ignoreTalkPower, talkPower (int)
+    bool siglaAfter = false;   // false = antes do nome; true = depois do nome
+    bool orderEnabled = true;  // participa da ordenação da lista de usuários
 };
 
 // Registro persistente de identidade (UID) já vista no servidor

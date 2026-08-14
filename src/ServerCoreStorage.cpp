@@ -162,7 +162,7 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT id, name, sigla, order_index, icon, perms, position FROM groups")) {
+        if (q.exec("SELECT id, name, sigla, order_index, icon, perms, position, sigla_after, order_enabled FROM groups")) {
             while (q.next()) {
                 GroupDef g;
                 g.id = q.value(0).toInt();
@@ -171,6 +171,8 @@ void ServerCore::loadData() {
                 g.order = q.value(3).toInt();
                 g.icon = q.value(4).toString();
                 g.position = q.value(6).toInt(0);  // Pilar 1: position hierárquico
+                g.siglaAfter = q.value(7).toBool();
+                g.orderEnabled = q.value(8).toBool();
                 
                 QJsonDocument doc = QJsonDocument::fromJson(q.value(5).toString().toUtf8());
                 g.perms = doc.object();
@@ -182,7 +184,9 @@ void ServerCore::loadData() {
                     // Atualiza campos de sigla, order, icon e position nos grupos built-in carregados
                     if (m_groups.contains(g.id)) {
                         m_groups[g.id].sigla = g.sigla;
+                        m_groups[g.id].siglaAfter = g.siglaAfter;
                         m_groups[g.id].order = g.order;
+                        m_groups[g.id].orderEnabled = g.orderEnabled;
                         m_groups[g.id].icon = g.icon;
                         m_groups[g.id].position = g.position;  // Pilar 1
                     }
@@ -391,8 +395,14 @@ bool ServerCore::initDatabase() {
            "`order_index` INT, "
            "`icon` VARCHAR(255), "
            "`perms` TEXT, "
-           "`position` INT DEFAULT 0"
+           "`position` INT DEFAULT 0, "
+           "`sigla_after` INT NOT NULL DEFAULT 0, "
+           "`order_enabled` INT NOT NULL DEFAULT 1"
            ")");  // Pilar 1: position hierárquica do grupo
+    // Compatibilidade com bancos existentes: antes = prefixo e a ordem
+    // participava da lista, exatamente como nas versões anteriores.
+    q.exec("ALTER TABLE groups ADD COLUMN `sigla_after` INT NOT NULL DEFAULT 0");
+    q.exec("ALTER TABLE groups ADD COLUMN `order_enabled` INT NOT NULL DEFAULT 1");
            
     q.exec("CREATE TABLE IF NOT EXISTS assignments ("
            "`uid` VARCHAR(255) PRIMARY KEY, "
@@ -543,7 +553,9 @@ void ServerCore::loadDataFromJson() {
         g.name = o["name"].toString();
         g.perms = o["perms"].toObject();
         g.sigla = o["sigla"].toString();
+        g.siglaAfter = o["siglaAfter"].toBool(false);
         g.order = o["order"].toInt(0);
+        g.orderEnabled = o["orderEnabled"].toBool(true);
         g.icon = o["icon"].toString();
         g.position = o["position"].toInt(0);  // Pilar 1: position hierárquica
         if (g.id >= 100 && !g.name.isEmpty()) {
@@ -551,7 +563,9 @@ void ServerCore::loadDataFromJson() {
             m_nextGroupId = qMax(m_nextGroupId, g.id + 1);
         } else if (m_groups.contains(g.id)) {
             m_groups[g.id].sigla = g.sigla;
+            m_groups[g.id].siglaAfter = g.siglaAfter;
             m_groups[g.id].order = g.order;
+            m_groups[g.id].orderEnabled = g.orderEnabled;
             m_groups[g.id].icon = g.icon;
             m_groups[g.id].position = g.position;  // Pilar 1
         }
@@ -714,8 +728,8 @@ void ServerCore::saveDataToSql() {
         }
     }
 
-    q.prepare("INSERT INTO groups (`id`, `name`, `sigla`, `order_index`, `icon`, `perms`, `position`) "
-              "VALUES (:id, :name, :sigla, :order_index, :icon, :perms, :position)");
+    q.prepare("INSERT INTO groups (`id`, `name`, `sigla`, `order_index`, `icon`, `perms`, `position`, `sigla_after`, `order_enabled`) "
+              "VALUES (:id, :name, :sigla, :order_index, :icon, :perms, :position, :sigla_after, :order_enabled)");
     for (const GroupDef& g : m_groups) {
         q.bindValue(":id", g.id);
         q.bindValue(":name", g.name);
@@ -724,6 +738,8 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":icon", g.icon);
         q.bindValue(":perms", QString::fromUtf8(QJsonDocument(g.perms).toJson(QJsonDocument::Compact)));
         q.bindValue(":position", g.position);  // Pilar 1: position hierárquica
+        q.bindValue(":sigla_after", g.siglaAfter ? 1 : 0);
+        q.bindValue(":order_enabled", g.orderEnabled ? 1 : 0);
         if (!q.exec()) {
             log("SQL SAVE ERROR on groups: " + q.lastError().text());
         }

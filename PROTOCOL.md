@@ -153,11 +153,28 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 
 ```json
 {"id":5,"name":"Ana","uid":"base64…","ver":"3.6.2","platform":"Windows",
- "desc":"","group":"normal","sigla":"ADM","icon":"base64…","order":1,
+ "desc":"","group":"normal","sigla":"[ADM]","siglaSuffix":"[Fundador]",
+ "icon":"base64…","order":1,"orderEnabled":true,
  "gid":3,"position":10,"groupPosition":10,
  "mic":false,"spk":false,"away":false,"rec":false,"cc":false,
  "talking":false,"whispering":false,"screensharing":false,"av":"sha1…"}
 ```
+
+`sigla` contém as siglas efetivas que aparecem antes do nome e
+`siglaSuffix`, as que aparecem depois. `order` é a menor ordem entre os cargos
+atribuídos cuja `orderEnabled` esteja ativa; se nenhum cargo participar,
+`orderEnabled` é `false`.
+
+### Objeto `group`
+
+```json
+{"id":100,"name":"Moderador","perms":{"kick":true},"sigla":"[Mod]",
+ "siglaAfter":false,"order":20,"orderEnabled":true,"icon":"🛡️","position":50}
+```
+
+`siglaAfter=true` coloca a sigla desse cargo depois do nome. `orderEnabled=false`
+mantém o número salvo, mas exclui o cargo do cálculo da ordem efetiva do usuário.
+A `position` hierárquica continua independente e não é desativada por essa opção.
 
 ### Objeto `chan`
 
@@ -198,7 +215,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 | `banlist` | — | Lista de banimentos (perm `banList`) |
 | `unban` | `uid` | Remover banimento (perm `ban`) |
 | `group_list` | — | Lista grupos e permissões |
-| `group_set` | `id?`,`name?`,`perms?`,`sigla?`,`order?`,`icon?`,`position?` | Criar/editar grupo (perm `groupEdit`) |
+| `group_set` | `id?`,`name?`,`perms?`,`sigla?`,`siglaAfter?`,`order?`,`orderEnabled?`,`icon?`,`position?` | Criar/editar grupo (perm `groupEdit`) |
 | `group_delete` | `id` | Excluir grupo custom (id ≥ 100) |
 | `client_set_group` | `id?` ou `uid?`, `gid` | Atribuir grupo persistente por UID |
 | `server_edit` | `name?`,`motd?`,`banner?` (base64; vazio remove) | Editar servidor (perm `serverEdit`) |
@@ -235,7 +252,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 | `user_joined` | `user:{…}` | Cliente entrou |
 | `user_left` | `id`, `reason` (`quit`/`kicked`/`banned`/`dropped`) | Cliente saiu |
 | `user_moved` | `id`, `channel`, `by?` | Trocou de canal |
-| `user_state` / `user_nick` / `user_desc` / `user_group` | `id` + campos | Mudanças de estado/apelido/descrição/grupo (`user_group` inclui `gid`) |
+| `user_state` / `user_nick` / `user_desc` / `user_group` | `id` + campos | Mudanças de estado/apelido/descrição/grupo (`user_group` inclui `gid`, `sigla`, `siglaSuffix`, `order` e `orderEnabled`) |
 | `user_avatar` | `id`, `av` (sha-1) | Avatar mudou |
 | `avatar_data` | `uid`, `data` | Resposta a `avatar_get` |
 | `icon_data` | `name`, `data` | Resposta a `icon_get` |

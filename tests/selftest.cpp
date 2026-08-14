@@ -1,6 +1,8 @@
 #include "HallaProtocol.h"
 #include "PasswordHash.h"
 #include "HierarchyPolicy.h"
+#include "EffectiveGroupDisplay.h"
+#include "GroupMemberList.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -33,6 +35,33 @@ int main(int argc, char** argv) {
     if (!HierarchyPolicy::hasValidAdminIdentity(false, false)) return 40;
     if (HierarchyPolicy::hasValidAdminIdentity(false, true)) return 41;
     if (HierarchyPolicy::hasValidAdminIdentity(true, false)) return 42;
+
+    // Um cargo com ordem visual desligada não pode elevar o usuário. Outro
+    // cargo atribuído e habilitado fornece a ordem efetiva.
+    const EffectiveGroupDisplay display = effectiveGroupDisplay({
+        {QStringLiteral("[Admin]"), 0, false, false},
+        {QStringLiteral("[Membro]"), 40, true, true}
+    });
+    if (!display.orderEnabled || display.order != 40) return 50;
+    if (display.prefixSigla != QStringLiteral("[Admin]")) return 51;
+    if (display.suffixSigla != QStringLiteral("[Membro]")) return 52;
+
+    const EffectiveGroupDisplay disabledOnly = effectiveGroupDisplay({
+        {QStringLiteral("[Visitante]"), 1, false, false}
+    });
+    if (disabledOnly.orderEnabled || disabledOnly.order != 100000) return 53;
+
+    QJsonArray members;
+    members << QJsonObject{{QStringLiteral("uid"), QStringLiteral("current-user")},
+                           {QStringLiteral("name"), QStringLiteral("Nome antigo")},
+                           {QStringLiteral("online"), false}};
+    upsertOnlineGroupMember(members, 77, QStringLiteral("current-user"),
+                            QStringLiteral("Nome atual"));
+    if (members.size() != 1) return 60;
+    const QJsonObject onlineMember = members.first().toObject();
+    if (!onlineMember.value(QStringLiteral("online")).toBool()) return 61;
+    if (onlineMember.value(QStringLiteral("id")).toInt() != 77) return 62;
+    if (onlineMember.value(QStringLiteral("name")).toString() != QStringLiteral("Nome atual")) return 63;
 
     qInfo() << "HallaServer self-test OK";
     return 0;
