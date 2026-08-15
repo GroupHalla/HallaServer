@@ -192,6 +192,7 @@ private:
         int type, codec, quality, maxClients;
         int bitrate = 96; // de 16kbps a 384kbps (padrão 96)
         int order = 0;    // posição relativa entre canais irmãos
+        bool tempChannelParent = false; // destino global de novos canais temporários
         // Pilar 3: permissões exclusivas de canal
         // GrupoOverride: { "groupId": { "permKey": state } } onde state é:
         //   1 = Allow (permite/força), 0 = Deny (nega/corta), -1 = Inherit (herda do servidor)

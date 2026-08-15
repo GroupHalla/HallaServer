@@ -4,6 +4,7 @@
 #include "EffectiveGroupDisplay.h"
 #include "GroupMemberList.h"
 #include "GroupAssignmentPolicy.h"
+#include "TemporaryChannelPolicy.h"
 #include "TlsCertificate.h"
 
 #include <QCoreApplication>
@@ -103,6 +104,12 @@ int main(int argc, char** argv) {
     GroupAssignmentPolicy::apply(assignments, 101, QStringLiteral("toggle"));
     GroupAssignmentPolicy::apply(assignments, 101, QStringLiteral("toggle"));
     if (assignments != QList<int>{2}) return 83; // compatibilidade legada
+
+    if (TemporaryChannelPolicy::parentForNewChannel(7, 0, 42) != 42) return 90;
+    if (TemporaryChannelPolicy::parentForNewChannel(7, 1, 42) != 7) return 91;
+    if (TemporaryChannelPolicy::parentForNewChannel(7, 2, 42) != 7) return 92;
+    if (TemporaryChannelPolicy::canBeConfiguredParent(0)) return 93;
+    if (!TemporaryChannelPolicy::canBeConfiguredParent(2)) return 94;
 
     qInfo() << "HallaServer self-test OK";
     return 0;

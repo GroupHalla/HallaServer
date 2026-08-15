@@ -87,7 +87,7 @@ void ServerCore::loadData() {
         }
 
         // Tenta carregar canais - verifica se as colunas existem
-        if (!q.exec("SELECT `id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`, `group_position_reqs` FROM channels")) {
+        if (!q.exec("SELECT `id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`, `group_position_reqs`, `temp_channel_parent` FROM channels")) {
             log("AVISO: Falha ao carregar canais - talvez as colunas não existam. Erro: " + q.lastError().text());
             // Tenta versão sem a coluna nova
             if (q.exec("SELECT `id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels` FROM channels")) {
@@ -152,6 +152,7 @@ void ServerCore::loadData() {
                 }
                 // Pilar 1: Requisitos de position por grupo no canal
                 c.groupPositionReqs = QJsonDocument::fromJson(q.value(18).toString().toUtf8()).object();
+                c.tempChannelParent = q.value(19).toInt() != 0;
                 
                 if (c.id == 1) {
                     m_channels[1] = c;
@@ -160,6 +161,17 @@ void ServerCore::loadData() {
                 }
                 m_nextChanId = qMax(m_nextChanId, c.id + 1);
             }
+        }
+
+        // Mantém no máximo um destino global e nunca aceita um canal
+        // temporário como pai de outros canais temporários.
+        int configuredTempParent = 0;
+        for (SvrChan& channel : m_channels) {
+            if (!channel.tempChannelParent) continue;
+            if (channel.type == 0 || configuredTempParent != 0)
+                channel.tempChannelParent = false;
+            else
+                configuredTempParent = channel.id;
         }
 
         if (q.exec("SELECT id, name, sigla, order_index, icon, perms, position, sigla_after, order_enabled FROM groups")) {
@@ -378,7 +390,8 @@ bool ServerCore::initDatabase() {
            "`no_symbol` INT DEFAULT 0, "
            "`order_index` INT DEFAULT 0, "
            "`linked_channels` TEXT, "
-           "`group_position_reqs` TEXT"
+           "`group_position_reqs` TEXT, "
+           "`temp_channel_parent` INT NOT NULL DEFAULT 0"
            ")");  // Pilar 1: requisitos de position por grupo no canal
     // Migração silenciosa de bancos criados antes das opções visuais e de
     // áudio vinculado. O erro de coluna já existente é intencionalmente
@@ -387,6 +400,7 @@ bool ServerCore::initDatabase() {
     q.exec("ALTER TABLE channels ADD COLUMN `order_index` INT DEFAULT 0");
     q.exec("ALTER TABLE channels ADD COLUMN `linked_channels` TEXT");
     q.exec("ALTER TABLE channels ADD COLUMN `group_position_reqs` TEXT");  // Pilar 1
+    q.exec("ALTER TABLE channels ADD COLUMN `temp_channel_parent` INT NOT NULL DEFAULT 0");
            
     q.exec("CREATE TABLE IF NOT EXISTS groups ("
            "`id` INT PRIMARY KEY, "
@@ -695,8 +709,8 @@ void ServerCore::saveDataToSql() {
         q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
     }
 
-    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`, `group_position_reqs`) "
-              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol, :order_index, :linked_channels, :group_position_reqs)");
+    q.prepare("INSERT INTO channels (`id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`, `group_position_reqs`, `temp_channel_parent`) "
+              "VALUES (:id, :parentId, :name, :topic, :desc, :password, :isDefault, :type, :moderated, :codec, :codecQuality, :maxClients, :ntalk, :bitrate, :group_perms, :no_symbol, :order_index, :linked_channels, :group_position_reqs, :temp_channel_parent)");
     for (const SvrChan& c : m_channels) {
         if (c.type == 0) continue;
         q.bindValue(":id", c.id);
@@ -723,6 +737,7 @@ void ServerCore::saveDataToSql() {
         // Pilar 1: Salva requisitos de position por grupo no canal
         q.bindValue(":group_position_reqs",
                     QString::fromUtf8(QJsonDocument(c.groupPositionReqs).toJson(QJsonDocument::Compact)));
+        q.bindValue(":temp_channel_parent", c.tempChannelParent ? 1 : 0);
         if (!q.exec()) {
             log("SQL SAVE ERROR on channels: " + q.lastError().text());
         }

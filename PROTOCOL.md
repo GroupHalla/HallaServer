@@ -182,13 +182,18 @@ A `position` hierárquica continua independente e não é desativada por essa op
 
 ```json
 {"id":1,"parent":0,"order":0,"name":"Canal padrão","topic":"","desc":"",
- "pw":false,"def":true,"noSymbol":false,"type":2,"moderated":false,
+ "pw":false,"def":true,"noSymbol":false,"tempParent":false,"type":2,"moderated":false,
  "codec":4,"quality":6,"bitrate":96,"max":-1,
  "linked":[2],"users":[5,7],"ops":["uid…"],
  "groupPerms":{ }, "groupPositionReqs":{ }}
 ```
 
 `type`: 0 temporário, 1 semi-permanente, 2 permanente.
+`tempParent=true` designa este canal não temporário como o único destino global:
+novos canais temporários passam a ser criados automaticamente como seus subcanais.
+Alterar essa propriedade exige `chanEdit`. Na criação de um canal `type=0`, o
+servidor substitui o `parent` enviado pelo cliente e valida as permissões no
+destino configurado.
 `codec`: 4 = Opus Voice, 5 = Opus Music (+ legados Speex/CELT por compatibilidade).
 
 ### Cliente → Servidor
@@ -206,7 +211,7 @@ A `position` hierárquica continua independente e não é desativada por essa op
 | `desc` | `text` | Alterar descrição |
 | `poke` | `to`, `msg` | Cutucar cliente |
 | `volume` | `to`, `db` (−40..12) | Informativo (volume é aplicado localmente) |
-| `chan_create` | `name`,`parent`,`topic?`,`desc?`,`pass?`,`type`,`codec`,`quality`,`max`,`moderated?` | Criar canal |
+| `chan_create` | `name`,`parent`,`topic?`,`desc?`,`pass?`,`type`,`codec`,`quality`,`max`,`moderated?`,`tempParent?` | Criar canal |
 | `chan_edit` | `id` + campos de `chan_create`, `op_add?`,`op_del?` | Editar canal / operadores |
 | `chan_move` | `id`,`parent`,`order` | Reordenar/mover canal |
 | `chan_link` | `ids` (2+), `link` | Vincular/desvincular áudio (rotaciona chaves) |

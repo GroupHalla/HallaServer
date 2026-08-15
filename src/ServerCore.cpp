@@ -7,6 +7,7 @@
 #include "EffectiveGroupDisplay.h"
 #include "GroupMemberList.h"
 #include "GroupAssignmentPolicy.h"
+#include "TemporaryChannelPolicy.h"
 #include "TlsCertificate.h"
 
 #include <QFile>
@@ -145,7 +146,17 @@ ServerCore::ServerCore(QObject* parent) : QObject(parent) {
 ServerCore::~ServerCore() {
     saveData();
     saveBans();
-    qDeleteAll(m_clients);
+
+    // Destruir uma sessão fecha o socket e pode emitir disconnected(). Não
+    // deixe esse sinal modificar m_clients enquanto o contêiner é percorrido.
+    const QList<ClientSession*> clients = m_clients.values();
+    m_clients.clear();
+    m_byVoiceToken.clear();
+    m_byLegacyVoiceToken.clear();
+    for (ClientSession* client : clients) {
+        disconnect(client, nullptr, this, nullptr);
+        delete client;
+    }
 }
 
 bool ServerCore::start(quint16 controlPort, quint16 voicePort) {
@@ -1344,7 +1355,7 @@ void ServerCore::handleVolume(ClientSession*, const QJsonObject&) {
 }
 
 void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
-    const int type = obj["type"].toInt(2);
+    const int type = qBound(0, obj["type"].toInt(2), 2);
     // permissão granular por tipo de canal
     const char* perm = (type == 0) ? "chanCreateTemp"
                      : (type == 1) ? "chanCreateSemi" : "chanCreatePerm";
@@ -1360,9 +1371,27 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     // somente de espaço.
     if (!validHumanText(name, 80, false)) { sendError(c, "bad_channel_name", "Nome de canal inválido"); return; }
 
+    const bool requestedTempParent = TemporaryChannelPolicy::canBeConfiguredParent(type)
+        && obj["tempParent"].toBool(false);
+    if (requestedTempParent && !hasPerm(c, "chanEdit")) {
+        sendError(c, "no_permission", "Sem permissão para definir o destino de canais temporários");
+        return;
+    }
+
     SvrChan ch;
     ch.id = m_nextChanId++;
-    ch.parent = obj["parent"].toInt(0);
+    int configuredTempParent = 0;
+    for (const SvrChan& candidate : m_channels) {
+        if (candidate.tempChannelParent
+                && TemporaryChannelPolicy::canBeConfiguredParent(candidate.type)) {
+            configuredTempParent = candidate.id;
+            break;
+        }
+    }
+    // Se um canal foi designado como destino, toda criação temporária é
+    // redirecionada para ele, independentemente do ponto escolhido na árvore.
+    ch.parent = TemporaryChannelPolicy::parentForNewChannel(
+        obj["parent"].toInt(0), type, configuredTempParent);
     if (ch.parent != 0 && !m_channels.contains(ch.parent)) ch.parent = 0;
     if (ch.parent != 0 && !hasChannelPerm(c, ch.parent, QStringLiteral("channel_create"))) {
         sendError(c, "no_permission", "Sem permissão para criar canais neste canal");
@@ -1399,15 +1428,31 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.moderated = obj["moderated"].toBool(false);
     ch.ntalk = qBound(0, obj["ntalk"].toInt(0), 100);
     ch.type = type;
+    ch.tempChannelParent = requestedTempParent;
     ch.codec = qBound(0, obj["codec"].toInt(4), 5);
     ch.quality = qBound(0, obj["quality"].toInt(6), 10);
     ch.bitrate = qBound(16, obj["bitrate"].toInt(96), 384);
     if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
     ch.maxClients = obj["max"].toInt(-1);
     ch.ops << c->uniqueId(); // v3: criador vira operador do canal
+
+    QList<int> clearedTempParents;
+    if (ch.tempChannelParent) {
+        for (SvrChan& other : m_channels) {
+            if (other.tempChannelParent) {
+                other.tempChannelParent = false;
+                clearedTempParents << other.id;
+            }
+        }
+    }
     m_channels[ch.id] = ch;
     saveData();
 
+    for (int clearedId : clearedTempParents) {
+        QJsonObject update = HProto::msg("chan_update");
+        update["chan"] = chanToJson(m_channels[clearedId]);
+        broadcast(update);
+    }
     QJsonObject m = HProto::msg("chan_update");
     m["chan"] = chanToJson(ch);
     broadcast(m);
@@ -1545,6 +1590,15 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     SvrChan& ch = m_channels[id];
+    const int requestedType = (obj.contains("type") && id != 1)
+        ? qBound(0, obj["type"].toInt(ch.type), 2) : ch.type;
+    const bool requestedTempParent = TemporaryChannelPolicy::canBeConfiguredParent(requestedType)
+        && (obj.contains("tempParent")
+            ? obj["tempParent"].toBool(false) : ch.tempChannelParent);
+    if (requestedTempParent != ch.tempChannelParent && !hasPerm(c, "chanEdit")) {
+        sendError(c, "no_permission", "Sem permissão para definir o destino de canais temporários");
+        return;
+    }
     if (obj.contains("name")) {
         const QString name = obj["name"].toString();
         if (!validHumanText(name, 80, false)) { sendError(c, "bad_channel_name", "Nome de canal inválido"); return; }
@@ -1569,14 +1623,30 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     }
     if (obj.contains("moderated")) ch.moderated = obj["moderated"].toBool();
     if (obj.contains("ntalk")) ch.ntalk = qBound(0, obj["ntalk"].toInt(), 100);
-    if (obj.contains("type") && id != 1) ch.type = obj["type"].toInt();
+    ch.type = requestedType;
+    ch.tempChannelParent = requestedTempParent;
     if (obj.contains("codec")) ch.codec = qBound(0, obj["codec"].toInt(), 5);
     if (obj.contains("quality")) ch.quality = qBound(0, obj["quality"].toInt(), 10);
     if (obj.contains("bitrate")) ch.bitrate = qBound(16, obj["bitrate"].toInt(96), 384);
     if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
     if (obj.contains("max")) ch.maxClients = obj["max"].toInt();
+
+    QList<int> clearedTempParents;
+    if (ch.tempChannelParent) {
+        for (SvrChan& other : m_channels) {
+            if (other.id != id && other.tempChannelParent) {
+                other.tempChannelParent = false;
+                clearedTempParents << other.id;
+            }
+        }
+    }
     saveData();
 
+    for (int clearedId : clearedTempParents) {
+        QJsonObject update = HProto::msg("chan_update");
+        update["chan"] = chanToJson(m_channels[clearedId]);
+        broadcast(update);
+    }
     QJsonObject m = HProto::msg("chan_update");
     m["chan"] = chanToJson(ch);
     broadcast(m);
@@ -2125,6 +2195,7 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
     c.bitrate = qBound(16, o["bitrate"].toInt(96), 384);
     c.noSymbol = o["noSymbol"].toBool(false);
     c.order = o["order"].toInt(0);
+    c.tempChannelParent = o["tempParent"].toBool(false);
     for (const QJsonValue& v : o["linked"].toArray()) {
         const int linkedId = v.toInt();
         if (linkedId > 0 && linkedId != c.id && !c.linkedChannels.contains(linkedId))
@@ -2150,6 +2221,7 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
     j["bitrate"] = c.bitrate;
     j["noSymbol"] = c.noSymbol;
     j["order"] = c.order;
+    j["tempParent"] = c.tempChannelParent;
     QJsonArray linked;
     for (int linkedId : c.linkedChannels) linked << linkedId;
     j["linked"] = linked;

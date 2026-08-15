@@ -122,6 +122,10 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    // Deve sobreviver ao ServerCore: o destrutor do núcleo ainda persiste
+    // dados e emite linhas de log durante o encerramento.
+    QTextStream out(stdout);
+
     ServerCore core;
     core.setServerName(name);
     core.setMotd(motd);
@@ -148,7 +152,6 @@ int main(int argc, char* argv[]) {
     core.setDatabaseUser(dbUser);
     core.setDatabasePassword(dbPassword);
 
-    QTextStream out(stdout);
     QObject::connect(&core, &ServerCore::logLine, &app,
                      [&out](const QString& line) { out << line << Qt::endl; });
 
