@@ -211,6 +211,50 @@ def main() -> None:
             "127.0.0.1", port, work / "normal-identity", "RoutingUser")
         assert normal.welcome["myPerms"].get("*") is not True
 
+        # A permissão de visualização é negada ao Normal, mas um cargo acima
+        # dele com Allow deve revelar o canal imediatamente.
+        admin.send({
+            "t": "group_set", "name": "Channel viewer", "position": 20,
+            "perms": {},
+        })
+        viewer_group = admin.receive("group_set_ok")["group"]
+        viewer_gid = viewer_group["id"]
+        assert viewer_gid >= 100
+        admin.send({
+            "t": "chan_create", "name": "Hidden from Normal", "type": 2,
+            "groupPerms": {
+                "2": {"view": 0},
+                str(viewer_gid): {"view": 1},
+            },
+            **base,
+        })
+        hidden = admin.receive_channel("Hidden from Normal")
+        removed = normal.receive(
+            "chan_removed", lambda obj: obj.get("id") == hidden["id"])
+        assert removed["id"] == hidden["id"]
+        normal.send({"t": "move", "channel": hidden["id"]})
+        hidden_move = normal.receive("error")
+        assert hidden_move.get("code") == "no_permission", hidden_move
+
+        admin.send({
+            "t": "client_set_group", "id": normal.welcome["selfId"],
+            "gid": viewer_gid, "op": "add",
+        })
+        revealed = normal.receive_channel("Hidden from Normal")
+        assert revealed["id"] == hidden["id"]
+        admin.send({
+            "t": "client_set_group", "id": normal.welcome["selfId"],
+            "gid": viewer_gid, "op": "remove",
+        })
+        hidden_again = normal.receive(
+            "chan_removed", lambda obj: obj.get("id") == hidden["id"])
+        assert hidden_again["id"] == hidden["id"]
+        normal.close()
+        normal = ProtocolClient(
+            "127.0.0.1", port, work / "normal-identity", "RoutingUser")
+        assert all(channel.get("id") != hidden["id"]
+                   for channel in normal.welcome.get("channels", []))
+
         # Um usuário sem chanEdit não pode remover a configuração global.
         normal.send({
             "t": "chan_edit", "id": destination_b["id"], "tempParent": False,
@@ -228,6 +272,8 @@ def main() -> None:
         normal = ProtocolClient(
             "127.0.0.1", port, work / "normal-identity", "RoutingUser")
         assert normal.welcome.get("myPerms", {}).get("*") is True
+        assert any(channel.get("id") == hidden["id"]
+                   for channel in normal.welcome.get("channels", []))
         normal.send({
             "t": "chan_edit", "id": destination_b["id"], "tempParent": False,
         })

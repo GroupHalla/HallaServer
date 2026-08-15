@@ -297,6 +297,8 @@ private:
     // permissões
     bool hasPerm(const ClientSession* c, const char* key) const;
     bool hasChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const;
+    bool canViewChannel(const ClientSession* c, int channelId) const;
+    void syncChannelVisibility(ClientSession* only = nullptr);
     int talkPower(const ClientSession* c) const;
     QJsonObject effectivePermissionsFor(const ClientSession* c) const;
     void applyGroup(ClientSession* c, int groupId, bool announce);

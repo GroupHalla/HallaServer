@@ -401,6 +401,17 @@ Regras especiais:
   `groupPositionReqs` por canal (allow/deny/inherit) e overrides de
   permissão por canal.
 
+### Visibilidade de canais
+
+A permissão de canal `view` corresponde a **Ver canal**. Sem regra explícita,
+o canal permanece visível para manter compatibilidade. Um `Deny` oculta o canal
+e todos os seus subcanais; o servidor não inclui esses objetos no `welcome` nem
+em atualizações destinadas ao cliente. Se qualquer outro cargo do mesmo usuário
+tiver `Allow`, o canal volta a ser visível — portanto um cargo acima de Normal
+pode revelar um canal negado ao cargo Normal. Administradores totais ignoram o
+bloqueio. Alterações de cargos e `privilegekey` ressincronizam a árvore
+imediatamente.
+
 ### Poder de fala (talk power)
 
 ```

@@ -436,6 +436,43 @@ bool ServerCore::hasChannelPerm(const ClientSession* c, int channelId, const QSt
     return hasEffectiveChannelPerm(c, channelId, permKey);
 }
 
+bool ServerCore::canViewChannel(const ClientSession* c, int channelId) const {
+    if (!c || !m_channels.contains(channelId)) return false;
+    if (isSuperAdmin(c)) return true;
+
+    // Sem regra explícita, canais continuam visíveis como nas versões
+    // anteriores. Um Allow em qualquer cargo prevalece sobre o Deny do cargo
+    // Normal, permitindo que cargos superiores revelem o canal novamente.
+    QSet<int> visited;
+    for (int current = channelId;
+         current != 0 && m_channels.contains(current) && !visited.contains(current);
+         current = m_channels.value(current).parent) {
+        visited.insert(current);
+        if (getChannelPermState(c, current, QStringLiteral("view")) == 0)
+            return false;
+    }
+    return true;
+}
+
+void ServerCore::syncChannelVisibility(ClientSession* only) {
+    const QList<ClientSession*> recipients = only
+        ? QList<ClientSession*>{only} : m_clients.values();
+    for (ClientSession* client : recipients) {
+        if (!client || client->id() <= 0) continue;
+        for (const SvrChan& channel : m_channels) {
+            QJsonObject message;
+            if (canViewChannel(client, channel.id)) {
+                message = HProto::msg("chan_update");
+                message["chan"] = chanToJson(channel);
+            } else {
+                message = HProto::msg("chan_removed");
+                message["id"] = channel.id;
+            }
+            client->send(message);
+        }
+    }
+}
+
 int ServerCore::talkPower(const ClientSession* c) const {
     if (!c) return 0;
     QList<int> gids = m_assignByUid.value(c->uniqueId());
@@ -562,6 +599,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         m["orderEnabled"] = display.orderEnabled;
         m["position"] = maxPos;
         broadcast(m);
+        syncChannelVisibility(c);
     }
 }
 
@@ -1079,7 +1117,8 @@ void ServerCore::sendWelcome(ClientSession* c) {
     w["users"] = users;
 
     QJsonArray chans;
-    for (const SvrChan& ch : m_channels) chans << chanToJson(ch);
+    for (const SvrChan& ch : m_channels)
+        if (canViewChannel(c, ch.id)) chans << chanToJson(ch);
     w["channels"] = chans;
 
     // v2: lista de grupos + minhas permissões
@@ -1183,8 +1222,8 @@ void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
-    if (!hasChannelPerm(c, target, "join")) {
-        sendError(c, "no_permission", "Sem permissão para entrar neste canal");
+    if (!canViewChannel(c, target) || !hasChannelPerm(c, target, "join")) {
+        sendError(c, "no_permission", "Sem permissão para ver ou entrar neste canal");
         return;
     }
 
@@ -1228,8 +1267,9 @@ void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "invalid_channel", "O destino precisa ser um canal existente");
         return;
     }
-    if (!hasChannelPerm(c, target, QStringLiteral("move"))) {
-        sendError(c, "no_permission", "Sem permissão para mover clientes para este canal");
+    if (!canViewChannel(c, target) || !canViewChannel(m_clients.value(id), target)
+            || !hasChannelPerm(c, target, QStringLiteral("move"))) {
+        sendError(c, "no_permission", "Sem permissão para visualizar ou mover clientes para este canal");
         return;
     }
     removeFromChannels(id);
@@ -1414,6 +1454,10 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.parent = TemporaryChannelPolicy::parentForNewChannel(
         obj["parent"].toInt(0), type, configuredTempParent);
     if (ch.parent != 0 && !m_channels.contains(ch.parent)) ch.parent = 0;
+    if (ch.parent != 0 && !canViewChannel(c, ch.parent)) {
+        sendError(c, "no_permission", "Sem permissão para visualizar o canal pai");
+        return;
+    }
     if (ch.parent != 0 && !hasChannelPerm(c, ch.parent, QStringLiteral("channel_create"))) {
         sendError(c, "no_permission", "Sem permissão para criar canais neste canal");
         return;
@@ -1484,6 +1528,10 @@ void ServerCore::handleChanMove(ClientSession* c, const QJsonObject& obj) {
     const int parent = obj["parent"].toInt(0);
     if (!m_channels.contains(id) || id == 1) return;
     if (parent != 0 && !m_channels.contains(parent)) return;
+    if (!canViewChannel(c, id) || (parent != 0 && !canViewChannel(c, parent))) {
+        sendError(c, "no_permission", "Sem permissão para visualizar os canais envolvidos");
+        return;
+    }
     if (!hasPerm(c, "chanEdit") && !isChanOp(c, id)) {
         sendError(c, "no_permission", "Sem permissão para reordenar canais");
         return;
@@ -1537,6 +1585,10 @@ void ServerCore::handleChanLink(ClientSession* c, const QJsonObject& obj) {
             sendError(c, "invalid_channel", "Um dos canais selecionados não existe mais");
             return;
         }
+        if (!canViewChannel(c, id)) {
+            sendError(c, "no_permission", "Sem permissão para visualizar um dos canais selecionados");
+            return;
+        }
     }
 
     // Vincular canais altera a rota de áudio de cada canal. A permissão
@@ -1588,6 +1640,10 @@ void ServerCore::handleChanLink(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     const int id = obj["id"].toInt();
     if (!m_channels.contains(id)) return;
+    if (!canViewChannel(c, id)) {
+        sendError(c, "no_permission", "Sem permissão para visualizar este canal");
+        return;
+    }
     // v3: operador do canal pode editar o próprio canal (exceto o padrão)
     if (!hasPerm(c, "chanEdit") && !(id != 1 && isChanOp(c, id))) {
         sendError(c, "no_permission", "Sem permissão para editar canais");
@@ -1828,6 +1884,7 @@ void ServerCore::handlePrivkey(ClientSession* c, const QJsonObject& obj) {
     granted["individual"] = true;
     granted["myPerms"] = effectivePermissionsFor(c);
     c->send(granted);
+    syncChannelVisibility(c);
     log(QStringLiteral("Cliente #%1 (%2) usou chave de privilégio -> permissões individuais totais")
             .arg(c->id()).arg(c->name()));
 }
@@ -2172,6 +2229,14 @@ void ServerCore::doKick(ClientSession* c, const QString& reason, bool fromServer
 
 // ==================================================================== util
 void ServerCore::broadcast(const QJsonObject& obj, int exceptId) {
+    // Objetos de canal nunca são enviados indiscriminadamente: cada cliente
+    // recebe apenas os canais que sua combinação de cargos pode visualizar.
+    // A sincronização completa também remove descendentes quando o pai passa
+    // a ficar oculto por uma edição de permissões.
+    if (obj.value(QStringLiteral("t")).toString() == QLatin1String("chan_update")) {
+        syncChannelVisibility();
+        return;
+    }
     for (ClientSession* c : m_clients)
         if (c->id() != exceptId) c->send(obj);
 }

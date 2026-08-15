@@ -194,6 +194,10 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleFtUpload(ClientSession* c, const QJsonObject& obj) {
     const int chan = obj["channel"].toInt();
     if (!m_channels.contains(chan)) return;
+    if (!canViewChannel(c, chan)) {
+        sendError(c, "no_permission", "Sem permissão para visualizar este canal");
+        return;
+    }
     if (!hasChannelPerm(c, chan, "file_upload")) {
         sendError(c, "no_permission", "Sem permissão para enviar arquivos neste canal");
         return;
@@ -238,6 +242,10 @@ void ServerCore::handleFtUpload(ClientSession* c, const QJsonObject& obj) {
 
 void ServerCore::handleFtList(ClientSession* c, const QJsonObject& obj) {
     const int chan = obj["channel"].toInt();
+    if (!canViewChannel(c, chan)) {
+        sendError(c, "no_permission", "Sem permissão para visualizar este canal");
+        return;
+    }
     QJsonObject m = HProto::msg("ft_list");
     m["channel"] = chan;
     QJsonArray arr;
@@ -254,6 +262,10 @@ void ServerCore::handleFtList(ClientSession* c, const QJsonObject& obj) {
 
 void ServerCore::handleFtDownload(ClientSession* c, const QJsonObject& obj) {
     const int chan = obj["channel"].toInt();
+    if (!canViewChannel(c, chan)) {
+        sendError(c, "no_permission", "Sem permissão para visualizar este canal");
+        return;
+    }
     if (!hasChannelPerm(c, chan, "file_download")) {
         sendError(c, "no_permission", "Sem permissão para baixar arquivos neste canal");
         return;
@@ -272,6 +284,10 @@ void ServerCore::handleFtDownload(ClientSession* c, const QJsonObject& obj) {
 
 void ServerCore::handleFtDelete(ClientSession* c, const QJsonObject& obj) {
     const int chan = obj["channel"].toInt();
+    if (!canViewChannel(c, chan)) {
+        sendError(c, "no_permission", "Sem permissão para visualizar este canal");
+        return;
+    }
     const QString name = sanitizeFileName(obj["name"].toString());
     int idx = -1;
     for (int i = 0; i < m_files.size(); ++i)
