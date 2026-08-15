@@ -190,6 +190,71 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
     // avisa estilo Halla no próprio cliente (UI local mostra o modo)
 }
 
+// =============================================== DADOS DE COMPLEMENTOS (v5)
+void ServerCore::handlePluginData(ClientSession* c, const QJsonObject& obj) {
+    if (!c || c->protocolVersion() < 5) {
+        sendError(c, "plugin_data_unsupported",
+                  "Dados de complementos exigem o protocolo v5");
+        return;
+    }
+    const QString pluginId = obj["plugin"].toString();
+    const QString topic = obj["topic"].toString();
+    const int target = obj["target"].toInt(-1);
+    if (pluginId.size() < 3 || pluginId.size() > 64 || topic.toUtf8().size() > 64
+            || target < 0 || target > 2) {
+        sendError(c, "bad_plugin_data", "Metadados de complemento inválidos");
+        return;
+    }
+    for (QChar ch : pluginId) {
+        const ushort u = ch.unicode();
+        if (!((u >= 'a' && u <= 'z') || (u >= '0' && u <= '9')
+                || u == '.' || u == '-' || u == '_')) {
+            sendError(c, "bad_plugin_data", "ID de complemento inválido");
+            return;
+        }
+    }
+    const auto decoded = QByteArray::fromBase64Encoding(
+        obj["data"].toString().toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+    if (!decoded || decoded.decoded.size() > 8192) {
+        sendError(c, "plugin_data_too_big", "Payload de complemento inválido ou muito grande");
+        return;
+    }
+
+    QSet<int> recipients;
+    if (target == 0) {
+        const int channelId = channelOfUser(c->id());
+        if (!m_channels.contains(channelId)) {
+            sendError(c, "invalid_channel", "Canal atual inválido");
+            return;
+        }
+        for (int userId : m_channels[channelId].users)
+            if (userId != c->id() && m_clients.contains(userId)) recipients.insert(userId);
+    } else if (target == 1) {
+        const QJsonArray ids = obj["ids"].toArray();
+        if (ids.isEmpty() || ids.size() > 64) {
+            sendError(c, "bad_plugin_data", "Lista de destinos inválida");
+            return;
+        }
+        for (const QJsonValue& value : ids) {
+            const int userId = value.toInt();
+            if (userId != c->id() && m_clients.contains(userId)) recipients.insert(userId);
+        }
+    } else {
+        for (ClientSession* other : m_clients)
+            if (other && other->id() != c->id()) recipients.insert(other->id());
+    }
+
+    QJsonObject message = HProto::msg("plugin_data");
+    message["from"] = c->id();
+    message["plugin"] = pluginId;
+    message["topic"] = topic;
+    message["data"] = QString::fromLatin1(decoded.decoded.toBase64());
+    for (int userId : recipients)
+        if (ClientSession* recipient = m_clients.value(userId, nullptr);
+                recipient && recipient->protocolVersion() >= 5)
+            recipient->send(message);
+}
+
 // ============================================================== ARQUIVOS (v3)
 void ServerCore::handleFtUpload(ClientSession* c, const QJsonObject& obj) {
     const int chan = obj["channel"].toInt();

@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     if (packet.size() != HProto::kClientMediaHeaderV4Bytes + 4) return 20;
     if (!packet.startsWith("HAL4") || packet.mid(4, 16) != token) return 21;
     if (!HProto::encodeVoiceClient(QByteArray(15, 'x'), 1, {}).isEmpty()) return 22;
-    if (HProto::kProtoVersion != 4 || HProto::kVoiceTokenBytes != 16) return 23;
+    if (HProto::kProtoVersion != 5 || HProto::kVoiceTokenBytes != 16) return 23;
 
     // groupEdit só alcança cargos e posições estritamente inferiores.
     if (!HierarchyPolicy::canManageGroup(false, 50, false, 49)) return 30;

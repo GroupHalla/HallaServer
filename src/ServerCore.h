@@ -287,6 +287,7 @@ private:
     void handleComplaintList(ClientSession* c);
     void handleComplaintClear(ClientSession* c, const QJsonObject& obj);
     void handleWhisper(ClientSession* c, const QJsonObject& obj);
+    void handlePluginData(ClientSession* c, const QJsonObject& obj);
     void handleFtUpload(ClientSession* c, const QJsonObject& obj);
     void handleFtList(ClientSession* c, const QJsonObject& obj);
     void handleFtDownload(ClientSession* c, const QJsonObject& obj);

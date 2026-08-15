@@ -11,7 +11,7 @@
 namespace HProto {
 
 constexpr quint16 kDefaultPort = 9987;
-constexpr int kProtoVersion = 4;
+constexpr int kProtoVersion = 5;
 constexpr int kProtoMin = 1;
 constexpr int kVoiceTokenBytes = 16;
 constexpr int kClientMediaHeaderV4Bytes = 4 + kVoiceTokenBytes + 2;

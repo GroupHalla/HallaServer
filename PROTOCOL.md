@@ -1,12 +1,13 @@
 
-# Halla Protocol — Especificação (v1 → v4 + Camada de Segurança + WebRTC)
+# Halla Protocol — Especificação (v1 → v5 + Camada de Segurança + WebRTC)
 
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.34, cliente desktop ≥ 1.0.50,
-> mobile ≥ 1.0.41. A camada de segurança (TLS, identidade Ed25519, voz AEAD)
-> é **obrigatória** para todas as conexões — não é negociável por versão.
+> **Estado atual:** servidor Halla ≥ 1.1.42 e cliente desktop ≥ 1.0.64
+> implementam o protocolo v5; clientes anteriores continuam aceitos dentro do
+> intervalo anunciado pelo servidor. Mobile permanece no protocolo v4. A
+> camada de segurança (TLS, identidade Ed25519, voz AEAD) é **obrigatória** para todas as conexões — não é negociável por versão.
 
 ## Visão geral
 
@@ -122,7 +123,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 |---|---|---|---|
 | `server_probe` | C→S | — | Consulta pública (via TLS); não cria sessão |
 | `server_probe` | S→C | `server:{name,motd,ver,maxClients}`, `clients`, `maxClients` | Resposta |
-| `hello` | C→S | `proto` (1..4), `uid`, `nick`, `idPub` (base64 DER), `pass?`, `adminPass?`, `ver`, `platform` | Login |
+| `hello` | C→S | `proto` (1..5), `uid`, `nick`, `idPub` (base64 DER), `pass?`, `adminPass?`, `ver`, `platform` | Login |
 | `identity_challenge` | S→C | `nonce` (base64, 32 B) | Desafio Ed25519 |
 | `identity_proof` | C→S | `sig` (base64) | Assinatura do nonce |
 | `welcome` | S→C | ver abaixo | Estado completo após login |
@@ -134,7 +135,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 {
   "t": "welcome",
   "selfId": 5,
-  "proto": 4,
+  "proto": 5,
   "server": {
     "name": "Servidor Halla", "motd": "…", "ver": "1.1.34",
     "platform": "Linux", "maxClients": 32, "banner": "base64…",
@@ -238,6 +239,7 @@ destino configurado.
 | `complaint_list` | — | Listar reclamações (perm `banList`) |
 | `complaint_clear` | `uid?` | Limpar reclamações |
 | `whisper` | `ids` (array; vazio desativa) | Direcionar voz a usuários específicos |
+| `plugin_data` (v5) | `plugin`, `target` (0 canal/1 usuários/2 servidor), `ids?`, `topic`, `data` (base64) | Encaminhar até 8 KiB entre instâncias do mesmo complemento |
 | `ft_upload` | `channel`,`name`,`data` (base64 ≤ 1 MiB) | Enviar arquivo (máx. 50/canal, 10 MiB total) |
 | `ft_list` | `channel` | Listar arquivos do canal |
 | `ft_download` | `channel`,`name` | Baixar arquivo |
@@ -280,15 +282,35 @@ destino configurado.
 | `privilege_granted` | `individual`, `myPerms` | Confirma a chave e atualiza imediatamente as permissões efetivas |
 | `server_edit` | `name`,`motd`,`banner?` | Servidor renomeado/MOTD/banner mudou |
 | `whisper_ok` | `count` | Sussurro ativado para N usuários |
+| `plugin_data` (v5) | `from`, `plugin`, `topic`, `data` (base64) | Payload confiável encaminhado pelo servidor |
 | `ft_uploaded` / `ft_list` / `ft_data` / `ft_deleted` | — | Transferência de arquivos |
 | `user_screenshare_state` | `id`, `on`, `mode?` (`"webrtc"` no modo novo) | Transmissão de tela ativa/inativa |
+
+### Dados de complementos (v5)
+
+`plugin_data` usa o canal TCP/TLS e não é persistido nem interpretado pelo
+servidor. O ID do complemento aceita 3–64 caracteres ASCII minúsculos, números,
+ponto, hífen e sublinhado; `topic` aceita até 64 bytes UTF-8 e `data`, depois da
+decodificação base64, até 8 KiB.
+
+Destinos:
+
+- `target=0`: todos os demais usuários do canal atual;
+- `target=1`: `ids` com 1–64 usuários conectados;
+- `target=2`: todos os demais clientes v5 do servidor.
+
+O servidor acrescenta `from`, não ecoa ao remetente e só entrega a sessões que
+negociaram protocolo v5. O limite é de 200 mensagens por 10 segundos por
+cliente, suficiente para telemetria posicional de até 20 Hz. Complementos devem
+usar tópicos/estruturas versionados e manter os payloads pequenos.
 
 ### Códigos de erro
 
 `bad_password`, `server_full`, `banned`, `name_in_use`, `no_permission`,
 `bad_channel_pass`, `bad_uid`, `bad_identity`, `privkey_used`, `locked`,
 `no_talk_power`, `not_found`, `inbox_full`, `screenshare_disabled`,
-`webrtc_target`, `webrtc_channel`, `webrtc_not_streaming`.
+`webrtc_target`, `webrtc_channel`, `webrtc_not_streaming`,
+`plugin_data_unsupported`, `bad_plugin_data`, `plugin_data_too_big`.
 
 ## Voz (UDP)
 
@@ -432,7 +454,8 @@ o próprio canal sem `chanEdit` e expulsam dele (exceto outros operadores).
 
 - **2 MiB** de teto por mensagem TCP (mensagens maiores derrubam a conexão).
 - Rate limit **por tipo de mensagem** (`server_probe`, `chat`, `move`,
-  `status`, `ping`, `ft_*`…) com janelas por cliente/IP; `talking` é isento.
+  `status`, `ping`, `plugin_data`, `ft_*`…) com janelas por cliente/IP;
+  `talking` é isento.
 - Limites por IP de conexões simultâneas e **timeout de ociosidade** TCP;
 - endpoints UDP ociosos são limpos periodicamente.
 - Validação estrita de tamanho/conteúdo para nick (≤ 30), chat, descrições,
@@ -479,10 +502,10 @@ Canais temporários somem quando ficam vazios; avatares ficam em
 
 ## Compatibilidade e versionamento
 
-- `hello.proto`: 1..4 (`kProtoVersion = 4`, `kProtoMin = 1`). O v4 troca o
-  token UDP sequencial de 32 bits por credencial CSPRNG de 128 bits e usa
-  `HAL4`/`HAF4` no sentido cliente→servidor. O servidor mantém recepção legada
-  v1-v3 durante a migração.
+- `hello.proto`: 1..5 (`kProtoVersion = 5`, `kProtoMin = 1`). O v4 trocou o
+  token UDP sequencial de 32 bits por credencial CSPRNG de 128 bits e adotou
+  `HAL4`/`HAF4`; o v5 acrescenta `plugin_data` confiável e limitado. O servidor
+  mantém recepção de clientes anteriores dentro do intervalo anunciado.
 - **TLS e identidade Ed25519 são incondicionais**: clientes antigos (sem TLS
   ou sem `idPub`) recebem erro/queda de conexão e devem atualizar.
 - Voz sem chave (texto puro) só é aceita transitoriamente quando o canal
@@ -501,9 +524,9 @@ Canais temporários somem quando ficam vazios; avatares ficam em
 5. **Rotação de chaves:** trate `channel_key` como autoridade; descarte chaves
    antigas do canal ao receber nova. Ao mover-se entre canais, aguarde a chave
    do novo canal antes de transmitir.
-6. **Teste de conformidade:** o repositório do servidor inclui o
-   `halla-nettest` com os cenários de protocolo; estenda-o ao implementar
-   recursos novos.
+6. **Teste de conformidade:** o repositório inclui `halla-nettest` e os testes
+   de integração. Para validar o transporte v5 após compilar:
+   `python3 tests/plugin_data_integration.py --server build/halla-server`.
 
 ---
 
@@ -516,5 +539,6 @@ Canais temporários somem quando ficam vazios; avatares ficam em
 | v3 | Avatares, mensagens offline, reclamações, operadores de canal, sussurro, transferência de arquivos |
 | v3.1 | ServerQuery na porta 10011 |
 | v4 | Token UDP CSPRNG de 128 bits, `HAL4`/`HAF4`, ICE/TURN distribuído pelo servidor e ServerQuery TLS |
+| v5 | Transporte TLS `plugin_data` para metadados binários entre complementos, com escopos, validação, limites e rate limit |
 | Segurança (obrigatória) | TLS + TOFU, identidade Ed25519 com desafio, chaves de canal de 32 B com rotação, ChaCha20-Poly1305 na voz e no screen share legado, limites/rate limit |
 | WebRTC | Sinalização de transmissão de tela via servidor, mídia P2P DTLS-SRTP |

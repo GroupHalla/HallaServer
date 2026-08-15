@@ -131,6 +131,9 @@ static void messageRateLimitFor(const QString& type, int& maxEvents, int& window
     // pode alternar fala/silêncio muitas vezes; não avise o usuário como spam.
     if (type == QLatin1String("talking")) { maxEvents = 0; return; }
     if (type == QLatin1String("status") || type == QLatin1String("ping")) { maxEvents = 30; return; }
+    // Metadados de jogos/áudio posicional podem chegar a 20 Hz. O payload
+    // individual continua limitado a 8 KiB no handler.
+    if (type == QLatin1String("plugin_data")) { maxEvents = 200; return; }
     if (type.startsWith(QLatin1String("ft_"))) { maxEvents = 8; windowMs = 60'000; return; }
     if (type == QLatin1String("identity_proof")) { maxEvents = 5; windowMs = 15'000; return; }
     if (type == QLatin1String("server_probe")) { maxEvents = 6; windowMs = 60'000; return; }
@@ -790,6 +793,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "complaint_list") handleComplaintList(c);
     else if (t == "complaint_clear") handleComplaintClear(c, obj);
     else if (t == "whisper")        handleWhisper(c, obj);
+    else if (t == "plugin_data")     handlePluginData(c, obj);
     else if (t == "ft_upload")      handleFtUpload(c, obj);
     else if (t == "ft_list")        handleFtList(c, obj);
     else if (t == "ft_download")    handleFtDownload(c, obj);
