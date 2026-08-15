@@ -23,13 +23,14 @@ class ProtocolClient:
         identity_dir.mkdir(parents=True, exist_ok=True)
         self.private_key = identity_dir / "identity.pem"
         self.public_key = identity_dir / "identity.der"
-        subprocess.run(
-            ["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(self.private_key)],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(
-            ["openssl", "pkey", "-in", str(self.private_key), "-pubout",
-             "-outform", "DER", "-out", str(self.public_key)],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not self.private_key.exists() or not self.public_key.exists():
+            subprocess.run(
+                ["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(self.private_key)],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(
+                ["openssl", "pkey", "-in", str(self.private_key), "-pubout",
+                 "-outform", "DER", "-out", str(self.public_key)],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -126,11 +127,13 @@ def main() -> None:
     log_path = work / "server.log"
     port = free_port()
     admin_password = "temporary-parent-integration-admin"
+    privilege_key = "HL3-TEMP-PARENT-TEST"
     (work / "halla-server.ini").write_text(
         "[server]\n"
         "name=Temporary Parent Integration\n"
         f"port={port}\n"
         f"adminPassword={admin_password}\n"
+        f"privilegeKeys={privilege_key}\n"
         "[query]\nport=0\n"
         "[database]\ntype=sqlite\n",
         encoding="utf-8")
@@ -215,8 +218,31 @@ def main() -> None:
         denied = normal.receive("error")
         assert denied.get("code") == "no_permission", denied
 
-        # Um cliente comum tenta forçar A como pai. O servidor deve ignorar o
-        # parent enviado e colocar o novo temporário em B.
+        # A privilege key precisa atualizar as permissões imediatamente e o
+        # privilégio individual persistido deve reaparecer no próximo welcome.
+        normal.send({"t": "privkey", "key": privilege_key})
+        granted = normal.receive("privilege_granted")
+        assert granted.get("individual") is True
+        assert granted.get("myPerms", {}).get("*") is True, granted
+        normal.close()
+        normal = ProtocolClient(
+            "127.0.0.1", port, work / "normal-identity", "RoutingUser")
+        assert normal.welcome.get("myPerms", {}).get("*") is True
+        normal.send({
+            "t": "chan_edit", "id": destination_b["id"], "tempParent": False,
+        })
+        disabled = normal.receive(
+            "chan_update", lambda obj: obj.get("chan", {}).get("id") == destination_b["id"])
+        assert disabled["chan"].get("tempParent") is False
+        normal.send({
+            "t": "chan_edit", "id": destination_b["id"], "tempParent": True,
+        })
+        enabled = normal.receive(
+            "chan_update", lambda obj: obj.get("chan", {}).get("id") == destination_b["id"])
+        assert enabled["chan"].get("tempParent") is True
+
+        # O cliente tenta forçar A como pai. O servidor deve ignorar o parent
+        # enviado e colocar o novo temporário em B.
         normal.send({
             "t": "chan_create", "name": "Forced temporary B",
             "parent": destination_a["id"], "type": 0,

@@ -151,6 +151,9 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 }
 ```
 
+`myPerms` reúne as permissões efetivas de todos os cargos do UID. Para uma
+identidade com privilégio individual total, inclui `"*": true`.
+
 ### Objeto `user`
 
 ```json
@@ -274,6 +277,7 @@ destino configurado.
 | `ban_removed` | `uid` | Banimento removido |
 | `group_list` | `groups:[…]` | Broadcast quando grupos mudam |
 | `group_set_ok` | `group:{…}` | Confirma ao editor os valores efetivamente aplicados ao cargo |
+| `privilege_granted` | `individual`, `myPerms` | Confirma a chave e atualiza imediatamente as permissões efetivas |
 | `server_edit` | `name`,`motd`,`banner?` | Servidor renomeado/MOTD/banner mudou |
 | `whisper_ok` | `count` | Sussurro ativado para N usuários |
 | `ft_uploaded` / `ft_list` / `ft_data` / `ft_deleted` | — | Transferência de arquivos |

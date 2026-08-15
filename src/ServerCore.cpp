@@ -453,7 +453,28 @@ int ServerCore::talkPower(const ClientSession* c) const {
     return maxPower;
 }
 
-QJsonObject ServerCore::myPermsOf(const GroupDef& g) { return g.perms; }
+QJsonObject ServerCore::effectivePermissionsFor(const ClientSession* c) const {
+    QJsonObject effective;
+    if (!c) return effective;
+
+    // As permissões do servidor são cumulativas entre todos os cargos do UID.
+    // O snapshot enviado ao cliente deve refletir a mesma regra de hasPerm().
+    for (int gid : groupIdsForUid(c->uniqueId())) {
+        if (!m_groups.contains(gid)) continue;
+        const QJsonObject groupPerms = m_groups.value(gid).perms;
+        for (auto it = groupPerms.constBegin(); it != groupPerms.constEnd(); ++it) {
+            if (it.value().isBool()) {
+                if (it.value().toBool() || !effective.contains(it.key()))
+                    effective[it.key()] = it.value().toBool();
+            } else if (it.value().isDouble()) {
+                effective[it.key()] = qMax(effective.value(it.key()).toInt(0),
+                                           it.value().toInt(0));
+            }
+        }
+    }
+    if (isSuperAdmin(c)) effective[QStringLiteral("*")] = true;
+    return effective;
+}
 
 int ServerCore::groupIdByName(const QString& name) const {
     for (const GroupDef& g : m_groups)
@@ -1065,7 +1086,7 @@ void ServerCore::sendWelcome(ClientSession* c) {
     QJsonArray groups;
     for (const GroupDef& g : m_groups) groups << groupToJson(g);
     w["groups"] = groups;
-    w["myPerms"] = myPermsOf(m_groups.value(c->groupId(), m_groups.value(1)));
+    w["myPerms"] = effectivePermissionsFor(c);
 
     ensureVoiceToken(c);
     QJsonObject voice;
@@ -1805,6 +1826,7 @@ void ServerCore::handlePrivkey(ClientSession* c, const QJsonObject& obj) {
     saveData();
     QJsonObject granted = HProto::msg("privilege_granted");
     granted["individual"] = true;
+    granted["myPerms"] = effectivePermissionsFor(c);
     c->send(granted);
     log(QStringLiteral("Cliente #%1 (%2) usou chave de privilégio -> permissões individuais totais")
             .arg(c->id()).arg(c->name()));

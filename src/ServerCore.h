@@ -298,7 +298,7 @@ private:
     bool hasPerm(const ClientSession* c, const char* key) const;
     bool hasChannelPerm(const ClientSession* c, int channelId, const QString& permKey) const;
     int talkPower(const ClientSession* c) const;
-    static QJsonObject myPermsOf(const GroupDef& g);
+    QJsonObject effectivePermissionsFor(const ClientSession* c) const;
     void applyGroup(ClientSession* c, int groupId, bool announce);
     int groupIdByName(const QString& name) const;
     void setupBuiltinGroups();
