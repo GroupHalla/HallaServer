@@ -1271,13 +1271,32 @@ void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "invalid_channel", "O destino precisa ser um canal existente");
         return;
     }
-    if (!canViewChannel(c, target) || !canViewChannel(m_clients.value(id), target)
-            || !hasChannelPerm(c, target, QStringLiteral("move"))) {
-        sendError(c, "no_permission", "Sem permissão para visualizar ou mover clientes para este canal");
+    ClientSession* targetClient = m_clients.value(id, nullptr);
+    if (!targetClient || targetClient == c) {
+        sendError(c, "invalid_target", "Cliente de destino inválido");
+        return;
+    }
+    if (!canManageClient(c, targetClient)) {
+        sendError(c, "hierarchy", "Você só pode mover clientes estritamente abaixo da sua posição");
+        return;
+    }
+    if (!canViewChannel(c, target) || !canViewChannel(targetClient, target)
+            || !hasChannelPerm(c, target, QStringLiteral("move"))
+            || !hasChannelPerm(targetClient, target, QStringLiteral("join"))) {
+        sendError(c, "no_permission", "Sem permissão efetiva para mover o cliente para este canal");
+        return;
+    }
+    SvrChan& destination = m_channels[target];
+    if (destination.maxClients >= 0 && destination.users.size() >= destination.maxClients) {
+        sendError(c, "channel_full", "O canal de destino está cheio");
+        return;
+    }
+    if (!destination.password.isEmpty() && !hasPerm(c, "ignoreChanPass")) {
+        sendError(c, "channel_password", "Mover para canal protegido exige a permissão de ignorar senha");
         return;
     }
     removeFromChannels(id);
-    m_channels[target].users << id;
+    destination.users << id;
     QJsonObject m = HProto::msg("user_moved");
     m["id"] = id; m["channel"] = target; m["by"] = c->id();
     broadcast(m);
@@ -1302,10 +1321,20 @@ void ServerCore::handleCommander(ClientSession* c, const QJsonObject& obj) {
                       : "Sem permissão para definir o comandante de outro cliente");
         return;
     }
+    ClientSession* target = m_clients.value(targetId);
+    if (targetId != c->id()) {
+        if (channelOfUser(c->id()) != channelOfUser(targetId)) {
+            sendError(c, "different_channel", "Comandante só pode ser alterado no mesmo canal");
+            return;
+        }
+        if (!canManageClient(c, target)) {
+            sendError(c, "hierarchy", "Você só pode alterar clientes abaixo da sua posição");
+            return;
+        }
+    }
 
     // O comando continua sendo uma ação de servidor, não um estado local
     // falsificável enviado em "status". A mudança é refletida para todos.
-    ClientSession* target = m_clients.value(targetId);
     target->setCommander(on);
     QJsonObject u = HProto::msg("user_state");
     u["id"] = targetId;
@@ -1502,7 +1531,7 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.quality = qBound(0, obj["quality"].toInt(6), 10);
     ch.bitrate = qBound(16, obj["bitrate"].toInt(96), 384);
     if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
-    ch.maxClients = obj["max"].toInt(-1);
+    ch.maxClients = qBound(-1, obj["max"].toInt(-1), m_maxClients);
     ch.ops << c->uniqueId(); // v3: criador vira operador do canal
 
     QList<int> clearedTempParents;
@@ -1536,8 +1565,15 @@ void ServerCore::handleChanMove(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "no_permission", "Sem permissão para visualizar os canais envolvidos");
         return;
     }
-    if (!hasPerm(c, "chanEdit") && !isChanOp(c, id)) {
+    const bool globalEditor = hasPerm(c, "chanEdit");
+    if (!globalEditor && !isChanOp(c, id)) {
         sendError(c, "no_permission", "Sem permissão para reordenar canais");
+        return;
+    }
+    if (!globalEditor && parent != 0
+            && (!isChanOp(c, parent)
+                || !hasChannelPerm(c, parent, QStringLiteral("channel_create")))) {
+        sendError(c, "no_permission", "Operadores locais não podem mover canais para uma árvore que não administram");
         return;
     }
     // Impede colocar um canal dentro de si mesmo ou de um descendente.
@@ -1648,8 +1684,9 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "no_permission", "Sem permissão para visualizar este canal");
         return;
     }
-    // v3: operador do canal pode editar o próprio canal (exceto o padrão)
-    if (!hasPerm(c, "chanEdit") && !(id != 1 && isChanOp(c, id))) {
+    // v3: operador do canal pode editar propriedades delegáveis do próprio canal.
+    const bool globalEditor = hasPerm(c, "chanEdit");
+    if (!globalEditor && !(id != 1 && isChanOp(c, id))) {
         sendError(c, "no_permission", "Sem permissão para editar canais");
         return;
     }
@@ -1676,7 +1713,19 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     const bool requestedTempParent = TemporaryChannelPolicy::canBeConfiguredParent(requestedType)
         && (obj.contains("tempParent")
             ? obj["tempParent"].toBool(false) : ch.tempChannelParent);
-    if (requestedTempParent != ch.tempChannelParent && !hasPerm(c, "chanEdit")) {
+    if (requestedType != ch.type) {
+        const char* createPerm = requestedType == 0 ? "chanCreateTemp"
+                               : requestedType == 1 ? "chanCreateSemi" : "chanCreatePerm";
+        if (!globalEditor || !hasPerm(c, createPerm)) {
+            sendError(c, "no_permission", "Alterar o tipo exige permissão global para o tipo de destino");
+            return;
+        }
+    }
+    if (obj.contains("groupPerms") && !globalEditor) {
+        sendError(c, "no_permission", "Operadores locais não podem alterar a matriz de permissões do canal");
+        return;
+    }
+    if (requestedTempParent != ch.tempChannelParent && !globalEditor) {
         sendError(c, "no_permission", "Sem permissão para definir o destino de canais temporários");
         return;
     }
@@ -1710,7 +1759,7 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
     if (obj.contains("quality")) ch.quality = qBound(0, obj["quality"].toInt(), 10);
     if (obj.contains("bitrate")) ch.bitrate = qBound(16, obj["bitrate"].toInt(96), 384);
     if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
-    if (obj.contains("max")) ch.maxClients = obj["max"].toInt();
+    if (obj.contains("max")) ch.maxClients = qBound(-1, obj["max"].toInt(), m_maxClients);
 
     QList<int> clearedTempParents;
     if (ch.tempChannelParent) {
@@ -2495,8 +2544,9 @@ void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByt
 void ServerCore::rotateChannelKey(int channelId) {
     if (!m_channels.contains(channelId)) return;
 
-    // A cifra é ponta-a-ponta no nível do canal e o servidor continua sendo
-    // relay puro. Para canais vinculados, todos os canais do componente de
+    // A cifra protege a mídia em trânsito entre clientes e relay. O servidor
+    // gera/distribui a chave e, portanto, não é excluído do modelo de confiança.
+    // Para canais vinculados, todos os canais do componente de
     // áudio precisam compartilhar a mesma chave; caso contrário, usuários em
     // canais linkados receberiam frames cifrados com uma chave que não possuem.
     QSet<int> component;
@@ -2521,9 +2571,10 @@ void ServerCore::rotateChannelKey(int channelId) {
     }
 
     QByteArray key(32, '\0');
-    QRandomGenerator* rng = QRandomGenerator::system();
-    for (int i = 0; i < key.size(); ++i)
-        key[i] = char(rng->bounded(256));
+    if (RAND_bytes(reinterpret_cast<unsigned char*>(key.data()), key.size()) != 1) {
+        log(QStringLiteral("FALHA: não foi possível gerar chave criptográfica de canal"));
+        return;
+    }
 
     for (int id : component)
         m_channelKeys[id] = key;
