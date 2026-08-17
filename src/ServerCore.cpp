@@ -646,6 +646,9 @@ void ServerCore::onClientDisconnected(ClientSession* client) {
         left["reason"] = "dropped";
         broadcast(left, client->id());
         removeFromChannels(client->id());
+        m_screenWatchers.remove(client->id());
+        for (auto it = m_screenWatchers.begin(); it != m_screenWatchers.end(); ++it)
+            it.value().remove(client->id());
         m_clients.remove(client->id());
         releaseVoiceToken(client);
         log(QStringLiteral("Cliente #%1 (%2) desconectou").arg(client->id()).arg(client->name()));
@@ -817,6 +820,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "screenshare_stop") {
         log(QStringLiteral("Cliente #%1 (%2) parou compartilhamento de tela").arg(c->id()).arg(c->name()));
         c->setScreensharing(false);
+        m_screenWatchers.remove(c->id());
         QJsonObject m = HProto::msg("user_screenshare_state");
         m["id"] = c->id();
         m["on"] = false;
@@ -829,6 +833,9 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
         left["reason"] = "quit";
         broadcast(left, c->id());
         removeFromChannels(c->id());
+        m_screenWatchers.remove(c->id());
+        for (auto it = m_screenWatchers.begin(); it != m_screenWatchers.end(); ++it)
+            it.value().remove(c->id());
         m_clients.remove(c->id());
         releaseVoiceToken(c);
         log(QStringLiteral("Cliente #%1 (%2) saiu").arg(c->id()).arg(c->name()));
@@ -843,6 +850,7 @@ void ServerCore::handleWebRtcStreamState(ClientSession* c, bool on) {
         return;
     }
     c->setScreensharing(on);
+    if (!on) m_screenWatchers.remove(c->id());
     QJsonObject m = HProto::msg("user_screenshare_state");
     m["id"] = c->id();
     m["on"] = on;
@@ -887,6 +895,12 @@ void ServerCore::handleWebRtcSignal(ClientSession* c, const QJsonObject& obj) {
         && obj.value(QStringLiteral("candidate")).toString().size() > 16 * 1024) {
         sendError(c, "webrtc_ice_too_big", "ICE candidate excede 16 KiB");
         return;
+    }
+
+    if (t == QLatin1String("webrtc_watch_request")) {
+        m_screenWatchers[target->id()].insert(c->id());
+    } else if (t == QLatin1String("webrtc_watch_stop")) {
+        m_screenWatchers[target->id()].remove(c->id());
     }
 
     QJsonObject out = obj;
@@ -2538,6 +2552,31 @@ void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByt
         if (sourceChannel <= 0 || targetChannel != sourceChannel) continue;
         if (!hasChannelPerm(target, targetChannel, QStringLiteral("listen"))) continue;
         m_voice->sendTo(target->udpAddress(), target->udpPort(), p);
+    }
+}
+
+void ServerCore::relayScreenAudio(ClientSession* sender, quint16 seq, const QByteArray& payload) {
+    if (!sender || !m_voice || !m_allowScreenShare || payload.isEmpty()
+            || !sender->screensharing()) return;
+    const int sourceChannel = channelOfUser(sender->id());
+    if (sourceChannel <= 0) return;
+
+    QByteArray packet;
+    packet.reserve(10 + payload.size());
+    packet.append("HAGA", 4); // Halla Audio, servidor -> espectador
+    const quint32 senderId = quint32(sender->id());
+    packet.append(reinterpret_cast<const char*>(&senderId), 4);
+    packet.append(reinterpret_cast<const char*>(&seq), 2);
+    packet.append(payload);
+
+    const QSet<int> watchers = m_screenWatchers.value(sender->id());
+    for (int watcherId : watchers) {
+        ClientSession* watcher = m_clients.value(watcherId, nullptr);
+        if (!watcher || watcher->udpPort() == 0) continue;
+        const int watcherChannel = channelOfUser(watcherId);
+        if (watcherChannel != sourceChannel
+                || !hasChannelPerm(watcher, watcherChannel, QStringLiteral("listen"))) continue;
+        m_voice->sendTo(watcher->udpAddress(), watcher->udpPort(), packet);
     }
 }
 

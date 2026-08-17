@@ -136,6 +136,7 @@ public:
     ClientSession* clientByLegacyVoiceToken(quint32 token) { return m_byLegacyVoiceToken.value(token, nullptr); }
     void relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload);
     void relayScreenShare(ClientSession* sender, quint16 seq, const QByteArray& payload);
+    void relayScreenAudio(ClientSession* sender, quint16 seq, const QByteArray& payload);
     QJsonObject voiceStats() const;
 
 signals:
@@ -179,6 +180,8 @@ private:
     QSslCertificate m_activeCertificate;
     QSslKey m_activePrivateKey;
     QJsonArray m_webRtcIceServers;
+    // streamerId -> espectadores que solicitaram explicitamente assistir.
+    QMap<int, QSet<int>> m_screenWatchers;
 
     QMap<int, ClientSession*> m_clients;
     QMap<QByteArray, ClientSession*> m_byVoiceToken;

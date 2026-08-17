@@ -16,7 +16,8 @@ pessoa possa implementar clientes, bots e ferramentas compatíveis.
 | Controle | **TCP + TLS 1.2+** | 9987 | Autenticação, canais, chat, estados, moderação, sinalização WebRTC |
 | Voz | UDP | 9987 | Pacotes Opus de 20 ms cifrados (ChaCha20-Poly1305), relay por canal |
 | Screen share (legado) | UDP | 9987 | Frames JPEG fatiados e cifrados (pacotes `HALF`) |
-| Mídia WebRTC | P2P (DTLS-SRTP) | dinâmica | Transmissão de tela moderna; o servidor só sinaliza |
+| Mídia WebRTC | P2P (DTLS-SRTP) | dinâmica | Vídeo da transmissão de tela moderna |
+| Áudio da tela Mobile | UDP | 9987 | Opus cifrado, entregue somente a espectadores explícitos (`HAG4`/`HAGA`) |
 | ServerQuery | **TCP + TLS** (desligado por padrão) | configurável | Administração remota |
 
 ## Camada de segurança
@@ -359,6 +360,19 @@ O destinatário remonta o frame quando reúne `chunkCount` chunks para o mesmo
 `(fromId, seq)`, descartando sequências antigas. Parâmetros negociados no
 `welcome` (`screenshare`, `screenshare_w`, `screenshare_h`, `screenshare_fps`).
 Recomenda-se usar o modo WebRTC em clientes novos.
+
+### Áudio de reprodução da tela Mobile
+
+O Android transmite o vídeo por WebRTC e envia o áudio interno capturável como
+Opus em um fluxo paralelo autenticado:
+
+- cliente → servidor: `"HAG4" | token(16) | seq(u16) | AEAD Opus`;
+- servidor → espectadores: `"HAGA" | senderId(u32) | seq(u16) | AEAD Opus`.
+
+O servidor só retransmite esse áudio para clientes do mesmo canal que enviaram
+`webrtc_watch_request`; `webrtc_watch_stop`, desconexão ou fim da live remove a
+assinatura. O cliente Android exclui o próprio UID da captura, evitando que as
+vozes reproduzidas pelo Halla retornem na transmissão.
 
 ## Transmissão de tela WebRTC
 
