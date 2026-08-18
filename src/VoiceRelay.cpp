@@ -32,11 +32,9 @@ void VoiceRelay::onReadyRead() {
                           && memcmp(data.constData(), "HAL4", 4) == 0;
         const bool screenV4 = data.size() >= HProto::kClientMediaHeaderV4Bytes
                            && memcmp(data.constData(), "HAF4", 4) == 0;
-        const bool screenAudioV4 = data.size() >= HProto::kClientMediaHeaderV4Bytes
-                                && memcmp(data.constData(), "HAG4", 4) == 0;
         const bool voiceLegacy = data.size() >= 10 && memcmp(data.constData(), "HALL", 4) == 0;
         const bool screenLegacy = data.size() >= 10 && memcmp(data.constData(), "HALF", 4) == 0;
-        if (!voiceV4 && !screenV4 && !screenAudioV4 && !voiceLegacy && !screenLegacy) {
+        if (!voiceV4 && !screenV4 && !voiceLegacy && !screenLegacy) {
             ++m_invalid;
             continue;
         }
@@ -44,7 +42,7 @@ void VoiceRelay::onReadyRead() {
         ClientSession* sender = nullptr;
         quint16 seq = 0;
         int payloadOffset = 0;
-        if (voiceV4 || screenV4 || screenAudioV4) {
+        if (voiceV4 || screenV4) {
             const QByteArray token = data.mid(4, HProto::kVoiceTokenBytes);
             memcpy(&seq, data.constData() + 4 + HProto::kVoiceTokenBytes, 2);
             payloadOffset = HProto::kClientMediaHeaderV4Bytes;
@@ -85,8 +83,6 @@ void VoiceRelay::onReadyRead() {
             ++m_opusFramesIn;
             m_opusBytesIn += quint64(payload.size());
             m_core->relayVoice(sender, seq, payload);
-        } else if (screenAudioV4) {
-            m_core->relayScreenAudio(sender, seq, payload);
         } else {
             m_core->relayScreenShare(sender, seq, payload);
         }

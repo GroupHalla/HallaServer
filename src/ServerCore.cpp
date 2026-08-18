@@ -8,7 +8,6 @@
 #include "GroupMemberList.h"
 #include "GroupAssignmentPolicy.h"
 #include "TemporaryChannelPolicy.h"
-#include "ScreenAudioPolicy.h"
 #include "TlsCertificate.h"
 
 #include <QFile>
@@ -2553,35 +2552,6 @@ void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByt
         if (sourceChannel <= 0 || targetChannel != sourceChannel) continue;
         if (!hasChannelPerm(target, targetChannel, QStringLiteral("listen"))) continue;
         m_voice->sendTo(target->udpAddress(), target->udpPort(), p);
-    }
-}
-
-void ServerCore::relayScreenAudio(ClientSession* sender, quint16 seq, const QByteArray& payload) {
-    if (!sender || !m_voice || !m_allowScreenShare || payload.isEmpty()
-            || !sender->screensharing()) return;
-    const int sourceChannel = channelOfUser(sender->id());
-    if (sourceChannel <= 0) return;
-
-    QByteArray packet;
-    packet.reserve(10 + payload.size());
-    packet.append("HAGA", 4); // Halla Audio, servidor -> espectador
-    const quint32 senderId = quint32(sender->id());
-    packet.append(reinterpret_cast<const char*>(&senderId), 4);
-    packet.append(reinterpret_cast<const char*>(&seq), 2);
-    packet.append(payload);
-
-    const QSet<int> watchers = m_screenWatchers.value(sender->id());
-    for (int watcherId : watchers) {
-        ClientSession* watcher = m_clients.value(watcherId, nullptr);
-        if (!watcher || watcher->udpPort() == 0) continue;
-        // O Mobile recebe o áudio pela track WebRTC do broadcaster. HAGA é o
-        // caminho compatível do Desktop; não envie os dois transportes ao
-        // Android, senão a WebView e o AudioTrack reproduzem o mesmo PCM.
-        if (!ScreenAudioPolicy::shouldRelayHagaToPlatform(watcher->platform())) continue;
-        const int watcherChannel = channelOfUser(watcherId);
-        if (watcherChannel != sourceChannel
-                || !hasChannelPerm(watcher, watcherChannel, QStringLiteral("listen"))) continue;
-        m_voice->sendTo(watcher->udpAddress(), watcher->udpPort(), packet);
     }
 }
 

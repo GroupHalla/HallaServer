@@ -5,7 +5,6 @@
 #include "GroupMemberList.h"
 #include "GroupAssignmentPolicy.h"
 #include "TemporaryChannelPolicy.h"
-#include "ScreenAudioPolicy.h"
 #include "TlsCertificate.h"
 
 #include <QCoreApplication>
@@ -111,12 +110,6 @@ int main(int argc, char** argv) {
     if (TemporaryChannelPolicy::parentForNewChannel(7, 2, 42) != 7) return 92;
     if (TemporaryChannelPolicy::canBeConfiguredParent(0)) return 93;
     if (!TemporaryChannelPolicy::canBeConfiguredParent(2)) return 94;
-
-    // Mobile viewers recebem a track de áudio WebRTC; Desktop recebe HAGA.
-    if (ScreenAudioPolicy::shouldRelayHagaToPlatform(QStringLiteral("Android"))) return 100;
-    if (ScreenAudioPolicy::shouldRelayHagaToPlatform(QStringLiteral("android"))) return 101;
-    if (!ScreenAudioPolicy::shouldRelayHagaToPlatform(QStringLiteral("Windows"))) return 102;
-    if (!ScreenAudioPolicy::shouldRelayHagaToPlatform(QStringLiteral("Linux"))) return 103;
 
     qInfo() << "HallaServer self-test OK";
     return 0;
