@@ -1,4 +1,4 @@
-# Halla Server 1.1.42
+# Halla Server 1.1.45
 
 Servidor Qt para Halla Desktop 1.0.50+ e Halla Mobile 1.0.41+. O Desktop
 1.0.64 adiciona o transporte de complementos v5; clientes anteriores continuam

@@ -4,7 +4,7 @@
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.42 e cliente desktop ≥ 1.0.64
+> **Estado atual:** servidor Halla ≥ 1.1.45 e cliente desktop ≥ 1.0.64
 > implementam o protocolo v5; clientes anteriores continuam aceitos dentro do
 > intervalo anunciado pelo servidor. Mobile permanece no protocolo v4. A
 > camada de segurança (TLS, identidade Ed25519, voz AEAD) é **obrigatória** para todas as conexões — não é negociável por versão.
@@ -369,10 +369,11 @@ Opus em um fluxo paralelo autenticado:
 - cliente → servidor: `"HAG4" | token(16) | seq(u16) | AEAD Opus`;
 - servidor → espectadores: `"HAGA" | senderId(u32) | seq(u16) | AEAD Opus`.
 
-O servidor só retransmite esse áudio para clientes do mesmo canal que enviaram
-`webrtc_watch_request`; `webrtc_watch_stop`, desconexão ou fim da live remove a
-assinatura. O cliente Android exclui o próprio UID da captura, evitando que as
-vozes reproduzidas pelo Halla retornem na transmissão.
+O servidor só retransmite esse áudio para clientes Desktop do mesmo canal que
+enviaram `webrtc_watch_request`; viewers Android recebem a track de áudio do
+próprio WebRTC, evitando reprodução duplicada. `webrtc_watch_stop`, desconexão
+ou fim da live remove a assinatura. O cliente Android exclui o próprio UID da
+captura, evitando que as vozes reproduzidas pelo Halla retornem na transmissão.
 
 ## Transmissão de tela WebRTC
 
