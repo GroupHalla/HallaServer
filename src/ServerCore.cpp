@@ -1546,7 +1546,8 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
     ch.bitrate = qBound(16, obj["bitrate"].toInt(96), 384);
     if (obj.contains("groupPerms")) ch.groupPerms = obj["groupPerms"].toObject();
     ch.maxClients = qBound(-1, obj["max"].toInt(-1), m_maxClients);
-    ch.ops << c->uniqueId(); // v3: criador vira operador do canal
+    ch.ops << c->uniqueId(); // indicador visual de operador local
+    if (type == 0) ch.temporaryOwnerUid = c->uniqueId();
 
     QList<int> clearedTempParents;
     if (ch.tempChannelParent) {
@@ -1580,8 +1581,8 @@ void ServerCore::handleChanMove(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     const bool globalEditor = hasPerm(c, "chanEdit");
-    if (!globalEditor && !isChanOp(c, id)) {
-        sendError(c, "no_permission", "Sem permissão para reordenar canais");
+    if (!globalEditor && (m_channels[id].type == 0 || !isChanOp(c, id))) {
+        sendError(c, "no_permission", "Dono de canal temporário não pode mover ou reordenar canais");
         return;
     }
     if (!globalEditor && parent != 0
@@ -1653,7 +1654,7 @@ void ServerCore::handleChanLink(ClientSession* c, const QJsonObject& obj) {
     // quando controlam todos os canais selecionados (e não o canal padrão).
     bool operatorOfAll = true;
     for (int id : ids) {
-        if (id == 1 || !isChanOp(c, id)) {
+        if (id == 1 || m_channels[id].type == 0 || !isChanOp(c, id)) {
             operatorOfAll = false;
             break;
         }
@@ -1701,30 +1702,49 @@ void ServerCore::handleChanEdit(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "no_permission", "Sem permissão para visualizar este canal");
         return;
     }
-    // v3: operador do canal pode editar propriedades delegáveis do próprio canal.
+    SvrChan& ch = m_channels[id];
     const bool globalEditor = hasPerm(c, "chanEdit");
-    if (!globalEditor && !(id != 1 && isChanOp(c, id))) {
+    const bool temporaryOwner = isTemporaryChannelOwner(c, id);
+    const bool localOperator = id != 1 && isChanOp(c, id);
+    if (!globalEditor && ((ch.type == 0 && !temporaryOwner)
+            || (!temporaryOwner && !localOperator))) {
         sendError(c, "no_permission", "Sem permissão para editar canais");
         return;
     }
-    // operadores de canal podem promover/rebaixar outros operadores (por UID)
+
+    if (temporaryOwner && !globalEditor) {
+        // Dono temporário é um papel deliberadamente limitado: nada de nome,
+        // descrição, tipo, permissões, operadores, codec, qualidade ou links.
+        static const QSet<QString> allowed{
+            QStringLiteral("t"), QStringLiteral("id"), QStringLiteral("pass"),
+            QStringLiteral("bitrate"), QStringLiteral("max")
+        };
+        for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+            if (!allowed.contains(it.key())) {
+                sendError(c, "temporary_owner_limit",
+                          "O dono temporário só pode alterar senha, bitrate e máximo de clientes");
+                return;
+            }
+        }
+    }
+
+    // Operadores de canais não temporários podem promover/rebaixar outros
+    // operadores. O criador temporário nunca delega seu papel limitado.
     if (obj.contains("op_add") || obj.contains("op_del")) {
-        if (!hasPerm(c, "chanEdit") && !isChanOp(c, id)) {
+        if (!globalEditor && (temporaryOwner || !localOperator)) {
             sendError(c, "no_permission", "Sem permissão para gerenciar operadores");
             return;
         }
         const QString targetUid = obj["uid"].toString();
-        SvrChan& chan = m_channels[id];
-        if (obj.contains("op_add") && !targetUid.isEmpty() && !chan.ops.contains(targetUid))
-            chan.ops << targetUid;
-        if (obj.contains("op_del")) chan.ops.removeAll(targetUid);
+        if (obj.contains("op_add") && !targetUid.isEmpty() && !ch.ops.contains(targetUid))
+            ch.ops << targetUid;
+        if (obj.contains("op_del")) ch.ops.removeAll(targetUid);
         saveData();
         QJsonObject m = HProto::msg("chan_update");
-        m["chan"] = chanToJson(chan);
+        m["chan"] = chanToJson(ch);
         broadcast(m);
         return;
     }
-    SvrChan& ch = m_channels[id];
     const int requestedType = (obj.contains("type") && id != 1)
         ? qBound(0, obj["type"].toInt(ch.type), 2) : ch.type;
     const bool requestedTempParent = TemporaryChannelPolicy::canBeConfiguredParent(requestedType)
@@ -1840,9 +1860,14 @@ void ServerCore::handleChanDelete(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleKick(ClientSession* c, const QJsonObject& obj) {
     const int id = obj["id"].toInt();
     const bool fromServer = obj["from"].toString() == "server";
-    // v3: kick de CANAL também é permitido ao operador do canal da vítima
-    const bool chanKickByOp = !fromServer && m_clients.contains(id)
-                              && isChanOp(c, channelOfUser(id));
+    const int targetChannel = m_clients.contains(id) ? channelOfUser(id) : 0;
+    const bool tempOwnerKick = !fromServer && targetChannel > 0
+        && isTemporaryChannelOwner(c, targetChannel);
+    // Operadores tradicionais continuam em canais não temporários. No canal
+    // temporário, somente o criador recebe o poder local de expulsão.
+    const bool chanKickByOp = !fromServer && targetChannel > 0
+        && (tempOwnerKick
+            || (m_channels[targetChannel].type != 0 && isChanOp(c, targetChannel)));
     if (!hasPerm(c, "kick") && !chanKickByOp) {
         sendError(c, "no_permission", "Sem permissão para expulsar");
         return;
@@ -1850,7 +1875,7 @@ void ServerCore::handleKick(ClientSession* c, const QJsonObject& obj) {
     if (!m_clients.contains(id) || id == c->id()) return;
     // operador não expulsa outro operador do mesmo canal
     if (chanKickByOp && !hasPerm(c, "kick")
-            && m_channels[channelOfUser(id)].ops.contains(m_clients[id]->uniqueId())) {
+            && m_channels[targetChannel].ops.contains(m_clients[id]->uniqueId())) {
         sendError(c, "no_permission", "Você não pode expulsar outro operador");
         return;
     }
@@ -1859,8 +1884,13 @@ void ServerCore::handleKick(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "no_permission", "Você não pode expulsar este cliente");
         return;
     }
-    // Pilar 1: Verificação de hierarquia - só pode kickar quem está abaixo na hierarquia
-    if (!canManageClient(c, m_clients[id])) {
+    // O dono temporário pode expulsar membros de mesma/menor posição apenas do
+    // canal criado por ele. Administradores totais e posições superiores
+    // continuam protegidos. Nos demais casos vale a hierarquia estrita normal.
+    const bool localTempKickAllowed = tempOwnerKick && !hasPerm(c, "kick")
+        && !isSuperAdmin(m_clients[id])
+        && clientPosition(c) >= clientPosition(m_clients[id]);
+    if (!localTempKickAllowed && !canManageClient(c, m_clients[id])) {
         sendError(c, "no_permission", "Você não tem posição hierárquica suficiente para expulsar este cliente");
         return;
     }
@@ -2372,6 +2402,7 @@ ServerCore::SvrChan ServerCore::chanFromJson(const QJsonObject& o) const {
             c.linkedChannels << linkedId;
     }
     for (const QJsonValue& v : o["ops"].toArray()) c.ops << v.toString();
+    c.temporaryOwnerUid = o["tempOwner"].toString();
     // Pilar 1: Carrega requisitos de position por grupo do canal
     if (o.contains("groupPositionReqs")) {
         c.groupPositionReqs = o["groupPositionReqs"].toObject();
@@ -2398,6 +2429,8 @@ QJsonObject ServerCore::chanToJson(const SvrChan& c) const {
     QJsonArray ops;
     for (const QString& u : c.ops) ops << u;
     j["ops"] = ops;
+    if (c.type == 0 && !c.temporaryOwnerUid.isEmpty())
+        j["tempOwner"] = c.temporaryOwnerUid;
     // Pilar 1: Requisitos de position por grupo no canal
     if (!c.groupPositionReqs.isEmpty()) {
         j["groupPositionReqs"] = c.groupPositionReqs;
@@ -2474,6 +2507,13 @@ QString ServerCore::sanitizeFileName(const QString& n) {
 bool ServerCore::isChanOp(const ClientSession* c, int channelId) const {
     if (!c || !m_channels.contains(channelId)) return false;
     return m_channels[channelId].ops.contains(c->uniqueId());
+}
+
+bool ServerCore::isTemporaryChannelOwner(const ClientSession* c, int channelId) const {
+    if (!c || !m_channels.contains(channelId)) return false;
+    const SvrChan& channel = m_channels[channelId];
+    return channel.type == 0 && !channel.temporaryOwnerUid.isEmpty()
+        && channel.temporaryOwnerUid == c->uniqueId();
 }
 
 void ServerCore::removeChannelFiles(int chan) {

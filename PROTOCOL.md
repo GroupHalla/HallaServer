@@ -4,7 +4,7 @@
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.49 e cliente desktop ≥ 1.0.64
+> **Estado atual:** servidor Halla ≥ 1.1.50 e cliente desktop ≥ 1.0.64
 > implementam o protocolo v5; clientes anteriores continuam aceitos dentro do
 > intervalo anunciado pelo servidor. O Mobile atual também negocia v5. A
 > camada de segurança (TLS, identidade Ed25519, voz AEAD) é **obrigatória** para todas as conexões — não é negociável por versão.
@@ -318,7 +318,7 @@ tópicos/estruturas versionados e manter os payloads pequenos.
 `no_talk_power`, `not_found`, `inbox_full`, `screenshare_disabled`,
 `webrtc_target`, `webrtc_channel`, `webrtc_not_streaming`,
 `plugin_data_unsupported`, `bad_plugin_data`, `plugin_data_too_big`,
-`plugin_data_scope`.
+`plugin_data_scope`, `temporary_owner_limit`.
 
 ## Voz (UDP)
 
@@ -466,9 +466,21 @@ Sem poder de fala, o servidor responde `no_talk_power` ao `talking=on` e
 
 ### Operadores de canal
 
-Quem cria um canal vira operador (`channels[].ops` = UIDs). Operadores editam
-o próprio canal sem `chanEdit` e expulsam dele (exceto outros operadores).
-`chan_edit` aceita `op_add`/`op_del` (perm `chanEdit`).
+Em canais semi-permanentes/permanentes, o criador continua operador
+(`channels[].ops` = UIDs) conforme as regras administrativas existentes.
+
+Em canal temporário, o criador aparece também em `tempOwner` e recebe um papel
+local não delegável. Sem permissões globais, ele pode somente:
+
+- definir/remover senha;
+- alterar o bitrate do codec (16–384 kbps);
+- alterar o máximo de clientes;
+- expulsar daquele canal usuários de posição igual ou inferior.
+
+Ele não pode renomear, editar descrição/tópico, trocar codec/qualidade/tipo,
+alterar permissões, promover operadores, mover/vincular/excluir canais, banir ou
+expulsar do servidor. Administradores totais e posições superiores permanecem
+protegidos. `chan_edit` fora dessa lista responde `temporary_owner_limit`.
 
 ## Limites, rate limiting e validação
 

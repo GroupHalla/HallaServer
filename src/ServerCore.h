@@ -219,6 +219,7 @@ private:
         QList<int> linkedChannels; // relação simétrica de áudio entre canais
         QList<int> users;
         QList<QString> ops; // v3: UIDs dos operadores do canal (criador + promovidos)
+        QString temporaryOwnerUid; // criador do canal temporário; poderes locais limitados
     };
     QMap<int, SvrChan> m_channels;
     int m_nextChanId = 1;
@@ -259,6 +260,7 @@ private:
     void saveDataToSql();
     void saveBansToSql();
     bool isChanOp(const ClientSession* c, int channelId) const;
+    bool isTemporaryChannelOwner(const ClientSession* c, int channelId) const;
     static QString sanitizeFileName(const QString& n);
     void removeChannelFiles(int chan);
 

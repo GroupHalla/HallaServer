@@ -52,6 +52,7 @@ class Client:
 
         der = public_key.read_bytes()
         uid = base64.b64encode(hashlib.sha256(der).digest()).decode()
+        self.uid = uid
         self.send({
             "t": "hello", "proto": protocol, "uid": uid,
             "idPub": base64.b64encode(der).decode(), "nick": nickname,
@@ -195,6 +196,42 @@ def main() -> None:
         assert broadcast["topic"] == "server.v1"
         cross_channel_broadcast = outsider.receive("plugin_data")
         assert cross_channel_broadcast["topic"] == "server.v1"
+
+        # O criador de canal temporário recebe somente os poderes locais
+        # delegados: senha, bitrate, máximo de clientes e kick de canal.
+        receiver.send({"t": "chan_create", "name": "Owned Temporary",
+                       "type": 0, "parent": 0, "bitrate": 96, "max": 2})
+        temp_created = receiver.receive(
+            "chan_update",
+            lambda message: message.get("chan", {}).get("name") == "Owned Temporary")
+        temp_channel = temp_created["chan"]["id"]
+        assert temp_created["chan"]["tempOwner"] == receiver.uid
+        outsider.send({"t": "move", "channel": temp_channel})
+        outsider.receive("user_moved",
+            lambda message: message.get("id") == outsider.id
+                            and message.get("channel") == temp_channel)
+
+        receiver.send({"t": "chan_edit", "id": temp_channel,
+                       "pass": "temporary-secret", "bitrate": 128, "max": 3})
+        temp_updated = receiver.receive(
+            "chan_update",
+            lambda message: message.get("chan", {}).get("id") == temp_channel
+                            and message.get("chan", {}).get("bitrate") == 128)
+        assert temp_updated["chan"]["pw"] is True
+        assert temp_updated["chan"]["max"] == 3
+
+        receiver.send({"t": "chan_edit", "id": temp_channel,
+                       "name": "Forbidden rename"})
+        limited = receiver.receive("error")
+        assert limited["code"] == "temporary_owner_limit", limited
+
+        receiver.send({"t": "kick", "id": outsider.id,
+                       "from": "channel", "reason": "owner test"})
+        kicked = outsider.receive("kicked")
+        assert kicked["ban"] is False
+        receiver.receive("user_moved",
+            lambda message: message.get("id") == outsider.id
+                            and message.get("channel") == 1)
 
         sender.send(plugin_message(0, "too-big", b"x" * 8193))
         too_big = sender.receive("error")
