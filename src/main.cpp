@@ -60,10 +60,14 @@ int main(int argc, char* argv[]) {
     const quint16 port = parser.isSet(portOpt)
             ? quint16(parser.value(portOpt).toUShort())
             : quint16(cfg.value("port", 9987).toUInt());
-    const QString name = parser.isSet(nameOpt)
+    const bool nameConfigured = parser.isSet(nameOpt) || cfg.contains("name");
+    const bool motdConfigured = cfg.contains("motd");
+    QString name = (parser.isSet(nameOpt)
             ? parser.value(nameOpt)
-            : cfg.value("name", "Servidor Halla").toString();
-    const QString motd = cfg.value("motd", "Bem-vindo ao servidor Halla!").toString();
+            : cfg.value("name", "Servidor Halla").toString()).trimmed().left(80);
+    if (name.isEmpty()) name = QStringLiteral("Servidor Halla");
+    const QString motd = cfg.value("motd", "Bem-vindo ao servidor Halla!")
+        .toString().left(4096);
     const int parsedMax = parser.isSet(maxOpt) ? parser.value(maxOpt).toInt() : 0;
     const int maxClients = (parsedMax <= 0) ? cfg.value("maxClients", 32).toInt() : parsedMax;
     QString password = parser.isSet(passOpt)
@@ -127,8 +131,8 @@ int main(int argc, char* argv[]) {
     QTextStream out(stdout);
 
     ServerCore core;
-    core.setServerName(name);
-    core.setMotd(motd);
+    core.setServerName(name, nameConfigured);
+    core.setMotd(motd, motdConfigured);
     core.setMaxClients(maxClients);
     core.setPassword(password);
     core.setAdminPassword(adminPassword);

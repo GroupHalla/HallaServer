@@ -15,6 +15,22 @@
 // Persistência e banco de dados do ServerCore. Mantido separado do fluxo de
 // sessão/rede para reduzir o tamanho do antigo ServerCore.cpp monolítico.
 
+static QString resolveConfiguredSetting(const QString& configured, bool hasConfigured,
+                                        const QString& persisted, const QString& previousSnapshot,
+                                        const QString& defaultValue) {
+    if (!hasConfigured) return persisted.isEmpty() ? defaultValue : persisted;
+    if (!previousSnapshot.isEmpty()) {
+        // INI diferente do último snapshot = edição manual desde o último start.
+        // INI igual = preserve eventual edição administrativa salva no banco.
+        return configured != previousSnapshot
+            ? configured : (persisted.isEmpty() ? configured : persisted);
+    }
+    // Migração de versões antigas sem snapshot: um valor não padrão no INI é
+    // intencional; com o template padrão, preserve personalização já no banco.
+    if (persisted.isEmpty() || configured != defaultValue) return configured;
+    return persisted;
+}
+
 static bool ensureGroupRuntimeDefaults(GroupDef& g) {
     bool changed = false;
     // Versões antigas não tinham a permissão global "listen", mas relayVoice
@@ -83,15 +99,32 @@ void ServerCore::loadData() {
     }
 
     if (dbHasData) {
+        QString persistedName;
+        QString persistedMotd;
+        QString previousConfigName;
+        QString previousConfigMotd;
         if (q.exec("SELECT key, value FROM settings")) {
             while (q.next()) {
-                QString key = q.value(0).toString();
-                QString val = q.value(1).toString();
-                if (key == "name") m_name = val;
-                else if (key == "motd") m_motd = val;
+                const QString key = q.value(0).toString();
+                const QString val = q.value(1).toString();
+                if (key == "name") persistedName = val;
+                else if (key == "motd") persistedMotd = val;
+                else if (key == "configNameSnapshot") previousConfigName = val;
+                else if (key == "configMotdSnapshot") previousConfigMotd = val;
                 else if (key == "queryPass") m_queryPass = val;
             }
         }
+        const QString resolvedName = resolveConfiguredSetting(
+            m_configuredName, m_hasConfiguredName, persistedName, previousConfigName,
+            QStringLiteral("Servidor Halla"));
+        const QString resolvedMotd = resolveConfiguredSetting(
+            m_configuredMotd, m_hasConfiguredMotd, persistedMotd, previousConfigMotd,
+            QStringLiteral("Bem-vindo ao servidor Halla!"));
+        if (resolvedName != persistedName && m_hasConfiguredName)
+            log(QStringLiteral("Configuração [server].name aplicada: \"%1\"").arg(resolvedName));
+        m_name = resolvedName.trimmed().left(80);
+        if (m_name.isEmpty()) m_name = QStringLiteral("Servidor Halla");
+        m_motd = resolvedMotd.left(4096);
 
         // Tenta carregar canais - verifica se as colunas existem
         if (!q.exec("SELECT `id`, `parentId`, `name`, `topic`, `desc`, `password`, `isDefault`, `type`, `moderated`, `codec`, `codecQuality`, `maxClients`, `ntalk`, `bitrate`, `group_perms`, `no_symbol`, `order_index`, `linked_channels`, `group_position_reqs`, `temp_channel_parent` FROM channels")) {
@@ -564,8 +597,15 @@ void ServerCore::loadDataFromJson() {
         m_channels.insert(c.id, c);
         m_nextChanId = qMax(m_nextChanId, c.id + 1);
     }
-    if (root.contains("name")) m_name = root["name"].toString();
-    if (root.contains("motd")) m_motd = root["motd"].toString();
+    const QString jsonName = root.value(QStringLiteral("name")).toString();
+    const QString jsonMotd = root.value(QStringLiteral("motd")).toString();
+    m_name = resolveConfiguredSetting(
+        m_configuredName, m_hasConfiguredName, jsonName, QString(),
+        QStringLiteral("Servidor Halla")).trimmed().left(80);
+    if (m_name.isEmpty()) m_name = QStringLiteral("Servidor Halla");
+    m_motd = resolveConfiguredSetting(
+        m_configuredMotd, m_hasConfiguredMotd, jsonMotd, QString(),
+        QStringLiteral("Bem-vindo ao servidor Halla!")).left(4096);
 
     for (const QJsonValue& v : root["groups"].toArray()) {
         const QJsonObject o = v.toObject();
@@ -712,6 +752,16 @@ void ServerCore::saveDataToSql() {
     q.prepare("INSERT INTO settings (`key`, `value`) VALUES (:key, :value)");
     q.bindValue(":key", "name"); q.bindValue(":value", m_name); q.exec();
     q.bindValue(":key", "motd"); q.bindValue(":value", m_motd); q.exec();
+    if (m_hasConfiguredName) {
+        q.bindValue(":key", "configNameSnapshot");
+        q.bindValue(":value", m_configuredName);
+        q.exec();
+    }
+    if (m_hasConfiguredMotd) {
+        q.bindValue(":key", "configMotdSnapshot");
+        q.bindValue(":value", m_configuredMotd);
+        q.exec();
+    }
     if (!m_queryPass.isEmpty()) {
         q.bindValue(":key", "queryPass"); q.bindValue(":value", m_queryPass); q.exec();
     }

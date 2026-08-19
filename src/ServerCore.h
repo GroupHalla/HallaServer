@@ -76,8 +76,16 @@ public:
     bool start(quint16 controlPort, quint16 voicePort);
 
     // config
-    void setServerName(const QString& n)    { m_name = n; }
-    void setMotd(const QString& m)          { m_motd = m; }
+    void setServerName(const QString& n, bool configured = true) {
+        m_name = n;
+        m_hasConfiguredName = configured;
+        if (configured) m_configuredName = n;
+    }
+    void setMotd(const QString& m, bool configured = true) {
+        m_motd = m;
+        m_hasConfiguredMotd = configured;
+        if (configured) m_configuredMotd = m;
+    }
     void setMaxClients(int n)               { m_maxClients = (n <= 0) ? 32 : n; }
     void setPassword(const QString& p)      { m_password = p; }
     void setAdminPassword(const QString& p) { m_adminPassword = p; }
@@ -154,6 +162,12 @@ private:
 
     QString m_name = "Servidor Halla";
     QString m_motd = "Bem-vindo ao Halla!";
+    // Nome/MOTD lidos do INI e o último snapshot permitem detectar uma edição
+    // manual sem quebrar alterações feitas pela administração dentro do Halla.
+    QString m_configuredName;
+    QString m_configuredMotd;
+    bool m_hasConfiguredName = false;
+    bool m_hasConfiguredMotd = false;
     QString m_version = "3.0.0";
     quint16 m_controlPort = 9987;
     QString m_queryPass;              // senha do ServerQuery (persistida)

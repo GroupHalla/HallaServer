@@ -1,4 +1,4 @@
-# Halla Server 1.1.47
+# Halla Server 1.1.48
 
 Servidor Qt para Halla Desktop 1.0.50+ e Halla Mobile 1.0.41+. O Desktop
 1.0.64 adiciona o transporte de complementos v5; clientes anteriores continuam
@@ -20,6 +20,11 @@ compatíveis dentro do intervalo v1–v5.
 
 Na primeira execução, se `certFile`/`keyFile` não forem configurados, o
 servidor gera certificado autoassinado. Clientes usam pinagem TOFU.
+
+`[server].name` aceita até 80 caracteres. Uma alteração manual no INI é
+detectada por snapshot e tem prioridade sobre o nome antigo persistido no
+SQLite/MySQL. Alterações feitas pela administração dentro do Halla continuam
+persistindo enquanto o valor do INI não for modificado novamente.
 
 Leia [`SECURITY.md`](SECURITY.md) antes de expor o servidor à internet e
 [`PROTOCOL.md`](PROTOCOL.md) para a especificação v5. Nunca configure

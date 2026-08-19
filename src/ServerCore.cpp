@@ -2229,13 +2229,13 @@ void ServerCore::handleServerEdit(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     if (obj.contains("name")) {
-        const QString n = obj["name"].toString().trimmed().left(40);
+        const QString n = obj["name"].toString().trimmed().left(80);
         if (!n.isEmpty() && n != m_name) {
             m_name = n;
             log(QStringLiteral("Nome do servidor alterado para \"%1\" por %2").arg(n, c->name()));
         }
     }
-    if (obj.contains("motd")) m_motd = obj["motd"].toString().left(200);
+    if (obj.contains("motd")) m_motd = obj["motd"].toString().left(4096);
 
     bool bannerChanged = false;
     if (obj.contains("banner")) {

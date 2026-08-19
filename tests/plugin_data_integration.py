@@ -216,7 +216,28 @@ def main() -> None:
         process.send_signal(signal.SIGTERM)
         assert process.wait(timeout=10) == 0
         log.close()
-        print("Plugin-data v5 integration OK")
+
+        # Regressão: o banco persistia "Servidor Halla"/nome anterior e
+        # sobrescrevia uma edição posterior em [server]. O INI modificado deve
+        # vencer no próximo start, sem perder a persistência administrativa.
+        configured_name = "Halla Comunidade Brasileira - Servidor Principal 2026"
+        config.write_text(
+            config.read_text(encoding="utf-8").replace(
+                "name=Plugin Data Integration", f"name={configured_name}"),
+            encoding="utf-8")
+        log = log_path.open("ab")
+        process = subprocess.Popen(
+            [str(server), "--config", str(config)], cwd=work,
+            stdout=log, stderr=subprocess.STDOUT)
+        verifier = Client("127.0.0.1", port, work, "ConfigVerifier")
+        clients.append(verifier)
+        assert verifier.welcome["server"]["name"] == configured_name, verifier.welcome
+        verifier.close()
+        clients.remove(verifier)
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=10) == 0
+        log.close()
+        print("Plugin-data v5 and server-name config integration OK")
     except Exception:
         if process.poll() is None:
             process.terminate()
