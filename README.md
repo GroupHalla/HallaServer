@@ -1,4 +1,4 @@
-# Halla Server 1.1.48
+# Halla Server 1.1.49
 
 Servidor Qt para Halla Desktop 1.0.50+ e Halla Mobile 1.0.41+. O Desktop
 1.0.64 adiciona o transporte de complementos v5; clientes anteriores continuam
@@ -10,6 +10,7 @@ compatíveis dentro do intervalo v1–v5.
 - Voz Opus AEAD: UDP 9987
 - Signaling WebRTC: pelo controle TLS; vídeo e áudio da tela trafegam via WebRTC
 - Dados de complementos v5: TLS, isolamento por canal e permissões `pluginData`/`pluginDataGlobal`
+- Reordenação de canais sincronizada uma única vez por operação, sem amplificação N×C
 - ServerQuery: TLS, desligado por padrão
 
 ## Execução

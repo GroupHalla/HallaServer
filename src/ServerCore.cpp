@@ -1590,12 +1590,15 @@ void ServerCore::handleChanMove(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "no_permission", "Operadores locais não podem mover canais para uma árvore que não administram");
         return;
     }
-    // Impede colocar um canal dentro de si mesmo ou de um descendente.
+    // Impede colocar um canal dentro de si mesmo ou de um descendente. O set
+    // também impede loop infinito caso uma base antiga já contenha um ciclo.
+    QSet<int> visitedParents;
     for (int p = parent; p != 0 && m_channels.contains(p); p = m_channels[p].parent) {
-        if (p == id) {
-            sendError(c, "invalid_parent", "Um canal não pode ser colocado dentro de sua própria árvore");
+        if (p == id || visitedParents.contains(p)) {
+            sendError(c, "invalid_parent", "Um canal não pode ser colocado dentro de uma árvore cíclica");
             return;
         }
+        visitedParents.insert(p);
     }
 
     QList<int> siblings;
@@ -1613,11 +1616,11 @@ void ServerCore::handleChanMove(ClientSession* c, const QJsonObject& obj) {
         m_channels[siblings[i]].order = i * 10;
     }
     saveData();
-    for (int siblingId : siblings) {
-        QJsonObject m = HProto::msg("chan_update");
-        m["chan"] = chanToJson(m_channels[siblingId]);
-        broadcast(m);
-    }
+    // Antes, cada irmão chamava broadcast(chan_update), e broadcast fazia uma
+    // sincronização completa. Com N irmãos e C canais isso gerava N×C mensagens
+    // e reconstruções de árvore, congelando/crashando clientes. O estado já foi
+    // aplicado atomicamente; sincronize cada canal uma única vez por cliente.
+    syncChannelVisibility();
 }
 
 void ServerCore::handleChanLink(ClientSession* c, const QJsonObject& obj) {

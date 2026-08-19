@@ -4,7 +4,7 @@
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.48 e cliente desktop ≥ 1.0.64
+> **Estado atual:** servidor Halla ≥ 1.1.49 e cliente desktop ≥ 1.0.64
 > implementam o protocolo v5; clientes anteriores continuam aceitos dentro do
 > intervalo anunciado pelo servidor. O Mobile atual também negocia v5. A
 > camada de segurança (TLS, identidade Ed25519, voz AEAD) é **obrigatória** para todas as conexões — não é negociável por versão.
@@ -480,6 +480,8 @@ o próprio canal sem `chanEdit` e expulsam dele (exceto outros operadores).
 - endpoints UDP ociosos são limpos periodicamente.
 - Validação estrita de tamanho/conteúdo para nick (≤ 30), chat, descrições,
   tópicos e campos de canal.
+- `chan_move` rejeita ciclos (inclusive ciclos preexistentes) e faz uma única
+  sincronização completa por operação; não multiplica a árvore por cada irmão.
 - Backoff/limite de tentativas de login inválido.
 
 ## ServerQuery (v3.1)
