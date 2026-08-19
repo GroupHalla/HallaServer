@@ -103,12 +103,14 @@ public:
     void setVersion(const QString& v)       { m_version = v; }
     void setAllowScreenShare(bool on)       { m_allowScreenShare = on; }
     bool allowScreenShare() const           { return m_allowScreenShare; }
-    void setScreenshareWidth(int w)         { m_screenshareWidth = w; }
+    void setScreenshareWidth(int w)         { m_screenshareWidth = qBound(640, w, 3840); }
     int screenshareWidth() const            { return m_screenshareWidth; }
-    void setScreenshareHeight(int h)        { m_screenshareHeight = h; }
+    void setScreenshareHeight(int h)        { m_screenshareHeight = qBound(360, h, 2160); }
     int screenshareHeight() const           { return m_screenshareHeight; }
-    void setScreenshareFps(int f)           { m_screenshareFps = f; }
+    void setScreenshareFps(int f)           { m_screenshareFps = qBound(1, f, 60); }
     int screenshareFps() const              { return m_screenshareFps; }
+    void setScreenshareBitrateKbps(int kbps) { m_screenshareBitrateKbps = qBound(500, kbps, 50000); }
+    int screenshareBitrateKbps() const      { return m_screenshareBitrateKbps; }
     void setCertificateFile(const QString& f) { m_certFile = f; }
     void setPrivateKeyFile(const QString& f)  { m_keyFile = f; }
     void setWebRtcIceServers(const QJsonArray& servers) { m_webRtcIceServers = servers; }
@@ -177,9 +179,10 @@ private:
     QMap<QString, QString> m_privKeyGroup; // chave -> nome do grupo concedido
     bool m_privKeyReuse = false;
     bool m_allowScreenShare = false;
-    int m_screenshareWidth = 1280;
-    int m_screenshareHeight = 720;
-    int m_screenshareFps = 12;
+    int m_screenshareWidth = 1920;
+    int m_screenshareHeight = 1080;
+    int m_screenshareFps = 60;
+    int m_screenshareBitrateKbps = 8000;
     QString m_dataFile;
     QString m_banFile;
     QString m_dbFile;
@@ -312,7 +315,7 @@ private:
     void handleFtDownload(ClientSession* c, const QJsonObject& obj);
     void handleFtDelete(ClientSession* c, const QJsonObject& obj);
     void handleWebRtcSignal(ClientSession* c, const QJsonObject& obj);
-    void handleWebRtcStreamState(ClientSession* c, bool on);
+    void handleWebRtcStreamState(ClientSession* c, bool on, const QJsonObject& obj);
 
     // permissões
     bool hasPerm(const ClientSession* c, const char* key) const;

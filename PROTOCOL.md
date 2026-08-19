@@ -4,7 +4,7 @@
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.50 e cliente desktop ≥ 1.0.64
+> **Estado atual:** servidor Halla ≥ 1.1.51 e cliente desktop ≥ 1.0.64
 > implementam o protocolo v5; clientes anteriores continuam aceitos dentro do
 > intervalo anunciado pelo servidor. O Mobile atual também negocia v5. A
 > camada de segurança (TLS, identidade Ed25519, voz AEAD) é **obrigatória** para todas as conexões — não é negociável por versão.
@@ -139,8 +139,9 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
   "server": {
     "name": "Servidor Halla", "motd": "…", "ver": "1.1.34",
     "platform": "Linux", "maxClients": 32, "banner": "base64…",
-    "screenshare": true, "screenshare_w": 800,
-    "screenshare_h": 450, "screenshare_fps": 20
+    "screenshare": true, "screenshare_w": 1920,
+    "screenshare_h": 1080, "screenshare_fps": 60,
+    "screenshare_bitrate": 8000
   },
   "users":    [ /* objetos user, incluindo "screensharing" */ ],
   "channels": [ /* objetos chan */ ],
@@ -316,7 +317,7 @@ tópicos/estruturas versionados e manter os payloads pequenos.
 `bad_password`, `server_full`, `banned`, `name_in_use`, `no_permission`,
 `bad_channel_pass`, `bad_uid`, `bad_identity`, `privkey_used`, `locked`,
 `no_talk_power`, `not_found`, `inbox_full`, `screenshare_disabled`,
-`webrtc_target`, `webrtc_channel`, `webrtc_not_streaming`,
+`screenshare_quality`, `webrtc_target`, `webrtc_channel`, `webrtc_not_streaming`,
 `plugin_data_unsupported`, `bad_plugin_data`, `plugin_data_too_big`,
 `plugin_data_scope`, `temporary_owner_limit`.
 
@@ -365,7 +366,8 @@ de até 1200 bytes; cada chunk é cifrado individualmente com o AEAD do canal.
 
 O destinatário remonta o frame quando reúne `chunkCount` chunks para o mesmo
 `(fromId, seq)`, descartando sequências antigas. Parâmetros negociados no
-`welcome` (`screenshare`, `screenshare_w`, `screenshare_h`, `screenshare_fps`).
+`welcome` (`screenshare`, `screenshare_w`, `screenshare_h`, `screenshare_fps`,
+`screenshare_bitrate`).
 Recomenda-se usar o modo WebRTC em clientes novos.
 
 ### Áudio da transmissão de tela
@@ -381,6 +383,12 @@ evitando que as vozes reproduzidas pelo Halla retornem na transmissão.
 
 O servidor atua **apenas como relay de sinalização** pelo canal TLS; a mídia
 flui P2P com criptografia DTLS-SRTP do próprio WebRTC.
+
+Os quatro campos `screenshare_*` do `welcome` são máximos. Clientes oficiais
+oferecem presets padrão até o limite conjunto de resolução, FPS e bitrate. O
+`webrtc_stream_start` atual inclui `width`, `height`, `fps` e `bitrate` (kbps);
+valores acima do INI são recusados com `screenshare_quality`. Clientes antigos
+sem esses campos continuam aceitos para compatibilidade.
 
 Regras de roteamento (aplicadas pelo servidor):
 - alvo deve existir e não ser o próprio remetente → senão `webrtc_target`;

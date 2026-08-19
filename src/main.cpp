@@ -83,9 +83,10 @@ int main(int argc, char* argv[]) {
     privKeys.removeAll(QString());
     const bool privKeyReuse = cfg.value("privilegeKeyReuse", false).toBool();
     const bool allowScreenShare = cfg.value("allowScreenShare", false).toBool();
-    const int ssWidth = cfg.value("screenshareWidth", 800).toInt();
-    const int ssHeight = cfg.value("screenshareHeight", 450).toInt();
-    const int ssFps = cfg.value("screenshareFps", 20).toInt();
+    const int ssWidth = cfg.value("screenshareWidth", 1920).toInt();
+    const int ssHeight = cfg.value("screenshareHeight", 1080).toInt();
+    const int ssFps = cfg.value("screenshareFps", 60).toInt();
+    const int ssBitrateKbps = cfg.value("screenshareBitrateKbps", 8000).toInt();
     const QString certFile = cfg.value("certFile", "").toString();
     const QString keyFile = cfg.value("keyFile", "").toString();
     cfg.endGroup();
@@ -142,6 +143,7 @@ int main(int argc, char* argv[]) {
     core.setScreenshareWidth(ssWidth);
     core.setScreenshareHeight(ssHeight);
     core.setScreenshareFps(ssFps);
+    core.setScreenshareBitrateKbps(ssBitrateKbps);
     core.setWebRtcIceServers(iceServers);
     if (!certFile.trimmed().isEmpty()) core.setCertificateFile(QFileInfo(certFile).isRelative() ? dir + "/" + certFile : certFile);
     if (!keyFile.trimmed().isEmpty()) core.setPrivateKeyFile(QFileInfo(keyFile).isRelative() ? dir + "/" + keyFile : keyFile);

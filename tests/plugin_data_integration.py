@@ -132,6 +132,8 @@ def main() -> None:
     config.write_text(
         "[server]\nname=Plugin Data Integration\n"
         f"port={port}\nmaxClients=6\nadminPassword=PluginAdminSecret\n"
+        "allowScreenShare=true\nscreenshareWidth=1920\nscreenshareHeight=1080\n"
+        "screenshareFps=60\nscreenshareBitrateKbps=8000\n"
         "[query]\nport=0\n[database]\ntype=sqlite\n",
         encoding="utf-8")
     log_path = work / "server.log"
@@ -154,6 +156,21 @@ def main() -> None:
         outsider = Client("127.0.0.1", port, work, "OtherChannel")
         clients.append(outsider)
         sender.receive("user_joined")
+
+        limits = sender.welcome["server"]
+        assert limits["screenshare_w"] == 1920
+        assert limits["screenshare_h"] == 1080
+        assert limits["screenshare_fps"] == 60
+        assert limits["screenshare_bitrate"] == 8000
+        sender.send({"t": "webrtc_stream_start", "width": 3840, "height": 2160,
+                     "fps": 60, "bitrate": 32000})
+        quality_error = sender.receive("error")
+        assert quality_error["code"] == "screenshare_quality", quality_error
+        sender.send({"t": "webrtc_stream_start", "width": 1920, "height": 1080,
+                     "fps": 60, "bitrate": 8000})
+        receiver.receive("user_screenshare_state",
+            lambda message: message.get("id") == sender.id and message.get("on") is True)
+        sender.send({"t": "webrtc_stream_stop"})
 
         # Normal mantém o caso legítimo no canal atual.
         receiver.send(plugin_message(0, "position.v1", b"xyz-position"))

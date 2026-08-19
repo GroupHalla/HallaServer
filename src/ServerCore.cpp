@@ -729,6 +729,10 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
         server["motd"] = m_motd;
         server["ver"] = m_version;
         server["maxClients"] = m_maxClients;
+        server["screenshare_w"] = m_screenshareWidth;
+        server["screenshare_h"] = m_screenshareHeight;
+        server["screenshare_fps"] = m_screenshareFps;
+        server["screenshare_bitrate"] = m_screenshareBitrateKbps;
         response["server"] = server;
         response["clients"] = m_clients.size();
         response["maxClients"] = m_maxClients;
@@ -801,8 +805,8 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "ft_list")        handleFtList(c, obj);
     else if (t == "ft_download")    handleFtDownload(c, obj);
     else if (t == "ft_delete")      handleFtDelete(c, obj);
-    else if (t == "webrtc_stream_start") handleWebRtcStreamState(c, true);
-    else if (t == "webrtc_stream_stop") handleWebRtcStreamState(c, false);
+    else if (t == "webrtc_stream_start") handleWebRtcStreamState(c, true, obj);
+    else if (t == "webrtc_stream_stop") handleWebRtcStreamState(c, false, obj);
     else if (t == "webrtc_watch_request" || t == "webrtc_watch_stop" ||
              t == "webrtc_offer" || t == "webrtc_answer" || t == "webrtc_ice") handleWebRtcSignal(c, obj);
     else if (t == "screenshare_start") {
@@ -843,11 +847,28 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     }
 }
 
-void ServerCore::handleWebRtcStreamState(ClientSession* c, bool on) {
+void ServerCore::handleWebRtcStreamState(ClientSession* c, bool on,
+                                         const QJsonObject& obj) {
     if (!c) return;
     if (on && !m_allowScreenShare) {
         sendError(c, "screenshare_disabled", "O compartilhamento de tela está desativado pelo servidor");
         return;
+    }
+    if (on && (obj.contains("width") || obj.contains("height")
+            || obj.contains("fps") || obj.contains("bitrate"))) {
+        const int width = obj["width"].toInt();
+        const int height = obj["height"].toInt();
+        const int fps = obj["fps"].toInt();
+        const int bitrate = obj["bitrate"].toInt();
+        if (width < 640 || height < 360 || fps < 1 || bitrate < 500
+                || width > m_screenshareWidth || height > m_screenshareHeight
+                || fps > m_screenshareFps || bitrate > m_screenshareBitrateKbps) {
+            sendError(c, "screenshare_quality",
+                      QStringLiteral("Qualidade excede o limite do servidor (%1x%2, %3 FPS, %4 kbps)")
+                          .arg(m_screenshareWidth).arg(m_screenshareHeight)
+                          .arg(m_screenshareFps).arg(m_screenshareBitrateKbps));
+            return;
+        }
     }
     c->setScreensharing(on);
     if (!on) m_screenWatchers.remove(c->id());
@@ -1126,6 +1147,7 @@ void ServerCore::sendWelcome(ClientSession* c) {
     server["screenshare_w"] = m_screenshareWidth;
     server["screenshare_h"] = m_screenshareHeight;
     server["screenshare_fps"] = m_screenshareFps;
+    server["screenshare_bitrate"] = m_screenshareBitrateKbps;
     if (!m_serverBanner.isEmpty())
         server["banner"] = QString::fromLatin1(m_serverBanner.toBase64());
     w["server"] = server;
