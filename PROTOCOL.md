@@ -4,7 +4,7 @@
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.46 e cliente desktop ≥ 1.0.64
+> **Estado atual:** servidor Halla ≥ 1.1.47 e cliente desktop ≥ 1.0.64
 > implementam o protocolo v5; clientes anteriores continuam aceitos dentro do
 > intervalo anunciado pelo servidor. O Mobile atual também negocia v5. A
 > camada de segurança (TLS, identidade Ed25519, voz AEAD) é **obrigatória** para todas as conexões — não é negociável por versão.
@@ -239,7 +239,7 @@ destino configurado.
 | `complaint_list` | — | Listar reclamações (perm `banList`) |
 | `complaint_clear` | `uid?` | Limpar reclamações |
 | `whisper` | `ids` (array; vazio desativa) | Direcionar voz a usuários específicos |
-| `plugin_data` (v5) | `plugin`, `target` (0 canal/1 usuários/2 servidor), `ids?`, `topic`, `data` (base64) | Encaminhar até 8 KiB entre instâncias do mesmo complemento |
+| `plugin_data` (v5) | `plugin`, `target` (0 canal/1 usuários/2 servidor), `ids?`, `topic`, `data` (base64) | Até 8 KiB; `pluginData` no canal ou `pluginDataGlobal` no servidor |
 | `ft_upload` | `channel`,`name`,`data` (base64 ≤ 1 MiB) | Enviar arquivo (máx. 50/canal, 10 MiB total) |
 | `ft_list` | `channel` | Listar arquivos do canal |
 | `ft_download` | `channel`,`name` | Baixar arquivo |
@@ -293,16 +293,23 @@ servidor. O ID do complemento aceita 3–64 caracteres ASCII minúsculos, númer
 ponto, hífen e sublinhado; `topic` aceita até 64 bytes UTF-8 e `data`, depois da
 decodificação base64, até 8 KiB.
 
-Destinos:
+Destinos e autorização:
 
-- `target=0`: todos os demais usuários do canal atual;
-- `target=1`: `ids` com 1–64 usuários conectados;
-- `target=2`: todos os demais clientes v5 do servidor.
+- `target=0`: demais usuários do canal atual com `listen`; o remetente precisa
+  de `pluginData` e `listen` efetivos no canal;
+- `target=1`: `ids` com 1–64 usuários, obrigatoriamente no mesmo canal do
+  remetente e com `listen`; qualquer alvo externo rejeita a mensagem inteira
+  com `plugin_data_scope`;
+- `target=2`: todos os demais clientes v5 do servidor, somente para sessões com
+  a permissão global administrativa `pluginDataGlobal`.
 
-O servidor acrescenta `from`, não ecoa ao remetente e só entrega a sessões que
-negociaram protocolo v5. O limite é de 200 mensagens por 10 segundos por
-cliente, suficiente para telemetria posicional de até 20 Hz. Complementos devem
-usar tópicos/estruturas versionados e manter os payloads pequenos.
+O cargo Normal recebe `pluginData` por padrão para preservar telemetria
+posicional dentro do canal; Guest não recebe. `pluginDataGlobal` é negada por
+padrão e só um administrador total pode concedê-la a outro cargo. O servidor
+acrescenta `from`, não ecoa ao remetente e só entrega a sessões que negociaram
+protocolo v5. O limite é de 200 mensagens por 10 segundos por cliente,
+suficiente para telemetria posicional de até 20 Hz. Complementos devem usar
+tópicos/estruturas versionados e manter os payloads pequenos.
 
 ### Códigos de erro
 
@@ -310,7 +317,8 @@ usar tópicos/estruturas versionados e manter os payloads pequenos.
 `bad_channel_pass`, `bad_uid`, `bad_identity`, `privkey_used`, `locked`,
 `no_talk_power`, `not_found`, `inbox_full`, `screenshare_disabled`,
 `webrtc_target`, `webrtc_channel`, `webrtc_not_streaming`,
-`plugin_data_unsupported`, `bad_plugin_data`, `plugin_data_too_big`.
+`plugin_data_unsupported`, `bad_plugin_data`, `plugin_data_too_big`,
+`plugin_data_scope`.
 
 ## Voz (UDP)
 
@@ -405,21 +413,24 @@ Grupos embutidos:
 | id | nome | permissões padrão |
 |---|---|---|
 | 1 | `guest` | `poke`, `privmsg`, talkPower 10 |
-| 2 | `normal` | guest + `chanCreateTemp`, talkPower 25 |
+| 2 | `normal` | guest + `chanCreateTemp`, `pluginData`, talkPower 25 |
 | 3 | `admin` | `*`, talkPower 75 |
 
 Grupos customizados têm `id ≥ 100` e persistem em `halla-data.json`.
 
 Chaves de permissão: `*`, `kick`, `ban`, `banList`, `move`,
 `chanCreateTemp`/`chanCreateSemi`/`chanCreatePerm`, `chanEdit`, `chanDelete`,
-`serverEdit`, `groupEdit`, `poke`, `privmsg`, `ignoreChanPass`,
+`serverEdit`, `groupEdit`, `poke`, `privmsg`, `pluginData` (envio no canal),
+`pluginDataGlobal` (broadcast administrativo), `ignoreChanPass`,
 `ignoreTalkPower`, `talkPower` (número) e `listen` (necessária para
-receber voz/sinalização WebRTC no canal; concedida por padrão).
+receber voz/sinalização WebRTC e dados de complementos no canal; concedida por
+padrão).
 
 Regras especiais:
 - Não-administrador (`*`) não expulsa/bane administrador (`*`).
 - Não se remove `*` de um grupo que o possui (anti-lockout).
-- Só administrador total cria, edita ou atribui grupos com `*`.
+- Só administrador total cria, edita ou atribui grupos com `*`, e somente ele
+  pode conceder `pluginDataGlobal`.
 - `groupEdit` só gerencia cargos e clientes estritamente abaixo da maior
   `position` do executor. O próprio cargo, posições iguais e cargos acima são
   bloqueados na edição, exclusão e atribuição.
@@ -548,6 +559,6 @@ Canais temporários somem quando ficam vazios; avatares ficam em
 | v3 | Avatares, mensagens offline, reclamações, operadores de canal, sussurro, transferência de arquivos |
 | v3.1 | ServerQuery na porta 10011 |
 | v4 | Token UDP CSPRNG de 128 bits, `HAL4`/`HAF4`, ICE/TURN distribuído pelo servidor e ServerQuery TLS |
-| v5 | Transporte TLS `plugin_data` para metadados binários entre complementos, com escopos, validação, limites e rate limit |
+| v5 | Transporte TLS `plugin_data` para metadados binários entre complementos, com isolamento por canal, permissões, validação, limites e rate limit |
 | Segurança (obrigatória) | TLS + TOFU, identidade Ed25519 com desafio, chaves de canal de 32 B com rotação, ChaCha20-Poly1305 na voz e no screen share legado, limites/rate limit |
 | WebRTC | Sinalização de transmissão de tela via servidor, mídia P2P DTLS-SRTP |

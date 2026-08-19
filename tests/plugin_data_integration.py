@@ -19,7 +19,8 @@ import time
 
 class Client:
     def __init__(self, host: str, port: int, work: Path,
-                 nickname: str, protocol: int = 5) -> None:
+                 nickname: str, protocol: int = 5,
+                 admin_password: str = "") -> None:
         identity = work / nickname
         identity.mkdir(parents=True)
         private_key = identity / "identity.pem"
@@ -54,6 +55,7 @@ class Client:
         self.send({
             "t": "hello", "proto": protocol, "uid": uid,
             "idPub": base64.b64encode(der).decode(), "nick": nickname,
+            "adminPass": admin_password,
             "ver": "plugin-data-integration", "platform": "Linux",
         })
         challenge = self.receive("identity_challenge")
@@ -128,7 +130,7 @@ def main() -> None:
     config = work / "halla-server.ini"
     config.write_text(
         "[server]\nname=Plugin Data Integration\n"
-        f"port={port}\nmaxClients=4\nadminPassword=\n"
+        f"port={port}\nmaxClients=6\nadminPassword=PluginAdminSecret\n"
         "[query]\nport=0\n[database]\ntype=sqlite\n",
         encoding="utf-8")
     log_path = work / "server.log"
@@ -138,7 +140,8 @@ def main() -> None:
         stdout=log, stderr=subprocess.STDOUT)
     clients: list[Client] = []
     try:
-        sender = Client("127.0.0.1", port, work, "PositionSender")
+        sender = Client("127.0.0.1", port, work, "PositionAdmin",
+                        admin_password="PluginAdminSecret")
         clients.append(sender)
         receiver = Client("127.0.0.1", port, work, "PositionReceiver")
         clients.append(receiver)
@@ -147,10 +150,14 @@ def main() -> None:
         clients.append(legacy)
         sender.receive("user_joined")
         receiver.receive("user_joined")
+        outsider = Client("127.0.0.1", port, work, "OtherChannel")
+        clients.append(outsider)
+        sender.receive("user_joined")
 
-        sender.send(plugin_message(0, "position.v1", b"xyz-position"))
-        channel = receiver.receive("plugin_data")
-        assert channel["from"] == sender.id
+        # Normal mantém o caso legítimo no canal atual.
+        receiver.send(plugin_message(0, "position.v1", b"xyz-position"))
+        channel = sender.receive("plugin_data")
+        assert channel["from"] == receiver.id
         assert channel["plugin"] == "community.positional"
         assert channel["topic"] == "position.v1"
         assert base64.b64decode(channel["data"]) == b"xyz-position"
@@ -160,9 +167,34 @@ def main() -> None:
         assert direct["from"] == receiver.id
         assert base64.b64decode(direct["data"]) == b"police"
 
+        # Broadcast global é negado ao cargo Normal.
+        receiver.send(plugin_message(2, "server.v1", b"forbidden"))
+        denied = receiver.receive("error")
+        assert denied["code"] == "no_permission", denied
+
+        # Cria outro canal e move um cliente para comprovar isolamento target=1.
+        sender.send({"t": "chan_create", "name": "Plugin Isolated",
+                     "type": 2, "parent": 0})
+        created = sender.receive(
+            "chan_update",
+            lambda message: message.get("chan", {}).get("name") == "Plugin Isolated")
+        isolated_channel = created["chan"]["id"]
+        outsider.send({"t": "move", "channel": isolated_channel})
+        outsider.receive(
+            "user_moved",
+            lambda message: message.get("id") == outsider.id
+                            and message.get("channel") == isolated_channel)
+
+        receiver.send(plugin_message(1, "cross-channel", b"blocked", [outsider.id]))
+        scope_error = receiver.receive("error")
+        assert scope_error["code"] == "plugin_data_scope", scope_error
+
+        # Administrador explicitamente autorizado ainda pode usar target=2.
         sender.send(plugin_message(2, "server.v1", b"broadcast"))
         broadcast = receiver.receive("plugin_data")
         assert broadcast["topic"] == "server.v1"
+        cross_channel_broadcast = outsider.receive("plugin_data")
+        assert cross_channel_broadcast["topic"] == "server.v1"
 
         sender.send(plugin_message(0, "too-big", b"x" * 8193))
         too_big = sender.receive("error")

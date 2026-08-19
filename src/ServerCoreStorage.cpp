@@ -28,6 +28,13 @@ static bool ensureGroupRuntimeDefaults(GroupDef& g) {
         g.perms[QStringLiteral("text_chat")] = true;
         changed = true;
     }
+    // O transporte v5 era implicitamente aberto. Preserve o uso legítimo no
+    // cargo Normal, agora restrito ao canal, sem concedê-lo a convidados. A
+    // permissão global nunca é migrada automaticamente.
+    if (g.id == 2 && !g.perms.contains(QStringLiteral("pluginData"))) {
+        g.perms[QStringLiteral("pluginData")] = true;
+        changed = true;
+    }
     return changed;
 }
 

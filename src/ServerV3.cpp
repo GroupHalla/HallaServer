@@ -192,7 +192,8 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
 
 // =============================================== DADOS DE COMPLEMENTOS (v5)
 void ServerCore::handlePluginData(ClientSession* c, const QJsonObject& obj) {
-    if (!c || c->protocolVersion() < 5) {
+    if (!c) return;
+    if (c->protocolVersion() < 5) {
         sendError(c, "plugin_data_unsupported",
                   "Dados de complementos exigem o protocolo v5");
         return;
@@ -221,25 +222,62 @@ void ServerCore::handlePluginData(ClientSession* c, const QJsonObject& obj) {
     }
 
     QSet<int> recipients;
-    if (target == 0) {
+    if (target == 0 || target == 1) {
         const int channelId = channelOfUser(c->id());
         if (!m_channels.contains(channelId)) {
             sendError(c, "invalid_channel", "Canal atual inválido");
             return;
         }
-        for (int userId : m_channels[channelId].users)
-            if (userId != c->id() && m_clients.contains(userId)) recipients.insert(userId);
-    } else if (target == 1) {
-        const QJsonArray ids = obj["ids"].toArray();
-        if (ids.isEmpty() || ids.size() > 64) {
-            sendError(c, "bad_plugin_data", "Lista de destinos inválida");
+        // pluginData autoriza envio no canal; listen preserva o mesmo limite
+        // de isolamento usado por voz, sussurros e sinalização WebRTC.
+        if (!hasChannelPerm(c, channelId, QStringLiteral("pluginData"))
+                || !hasChannelPerm(c, channelId, QStringLiteral("listen"))) {
+            sendError(c, "no_permission",
+                      "Sem permissão para enviar dados de complementos neste canal");
             return;
         }
-        for (const QJsonValue& value : ids) {
-            const int userId = value.toInt();
-            if (userId != c->id() && m_clients.contains(userId)) recipients.insert(userId);
+
+        if (target == 0) {
+            for (int userId : m_channels[channelId].users) {
+                ClientSession* recipient = m_clients.value(userId, nullptr);
+                if (!recipient || recipient == c) continue;
+                if (!hasChannelPerm(recipient, channelId, QStringLiteral("listen"))) continue;
+                recipients.insert(userId);
+            }
+        } else {
+            const QJsonArray ids = obj["ids"].toArray();
+            if (ids.isEmpty() || ids.size() > 64) {
+                sendError(c, "bad_plugin_data", "Lista de destinos inválida");
+                return;
+            }
+            // Valide a lista inteira antes de retransmitir: uma mensagem nunca
+            // pode ser parcialmente entregue e depois falhar por alvo externo.
+            for (const QJsonValue& value : ids) {
+                const int userId = value.toInt();
+                if (userId <= 0) {
+                    sendError(c, "bad_plugin_data", "Lista de destinos inválida");
+                    return;
+                }
+                if (userId == c->id()) continue;
+                ClientSession* recipient = m_clients.value(userId, nullptr);
+                if (!recipient) continue; // sessão que saiu entre UI e envio
+                if (channelOfUser(userId) != channelId
+                        || !hasChannelPerm(recipient, channelId, QStringLiteral("listen"))) {
+                    sendError(c, "plugin_data_scope",
+                              "Dados de complementos só podem alcançar usuários do mesmo canal");
+                    return;
+                }
+                recipients.insert(userId);
+            }
         }
     } else {
+        // Broadcast global é um recurso administrativo explícito. Nunca herda
+        // pluginData e permanece negado por padrão a Guest/Normal.
+        if (!hasPerm(c, "pluginDataGlobal")) {
+            sendError(c, "no_permission",
+                      "Sem permissão para transmitir dados de complementos ao servidor inteiro");
+            return;
+        }
         for (ClientSession* other : m_clients)
             if (other && other->id() != c->id()) recipients.insert(other->id());
     }

@@ -261,7 +261,7 @@ void ServerCore::setupBuiltinGroups() {
     normal.perms = QJsonObject{
         {"join", true}, {"listen", true}, {"talk", true}, {"text_chat", true},
         {"poke", true}, {"privmsg", true}, {"whisper", true}, {"chanCreateTemp", true},
-        {"talkPower", 25}
+        {"pluginData", true}, {"talkPower", 25}
     };
     GroupDef admin;  admin.id = 3;  admin.name = "admin";
     admin.position = 100;  // Nível administrativo mais alto
@@ -2036,7 +2036,6 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "no_permission", "Apenas administradores totais podem conceder a permissão *");
         return;
     }
-
     GroupDef g;
     if (id > 0) {
         if (!m_groups.contains(id)) {
@@ -2049,6 +2048,14 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         }
 
         g = m_groups[id];
+        if (obj.contains("perms")
+                && permissionEnabled(perms.value(QStringLiteral("pluginDataGlobal")))
+                && !permissionEnabled(g.perms.value(QStringLiteral("pluginDataGlobal")))
+                && !superAdmin) {
+            sendError(c, "no_permission",
+                      "Apenas administradores totais podem conceder pluginDataGlobal");
+            return;
+        }
         if (obj.contains("name") && !name.isEmpty() && !validateName(id, name)) return;
 
         // Proteção anti-lockout: nem o administrador total remove * de um
@@ -2078,6 +2085,12 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
     } else {
         if (name.isEmpty()) {
             sendError(c, "bad_group", "A criação do cargo exige um nome");
+            return;
+        }
+        if (permissionEnabled(perms.value(QStringLiteral("pluginDataGlobal")))
+                && !superAdmin) {
+            sendError(c, "no_permission",
+                      "Apenas administradores totais podem conceder pluginDataGlobal");
             return;
         }
         if (!validateName(0, name)) return;

@@ -50,4 +50,18 @@ target_include_directories(halla-selftest PRIVATE shared src)
 target_link_libraries(halla-selftest PRIVATE ${QT_LIBS} OpenSSL::Crypto)
 add_test(NAME halla-selftest COMMAND halla-selftest)
 
+# O teste end-to-end abre sockets TLS e valida autorização/isolamento real de
+# plugin_data. Mantemos em plataformas Unix, onde o encerramento por SIGTERM e
+# o CLI OpenSSL usados pelo fixture são portáveis no CI oficial.
+if (UNIX)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME plugin-data-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/plugin_data_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(plugin-data-integration PROPERTIES TIMEOUT 90)
+endif()
+
 install(TARGETS halla-server RUNTIME DESTINATION bin)
