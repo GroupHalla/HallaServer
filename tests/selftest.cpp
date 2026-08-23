@@ -81,6 +81,40 @@ int main(int argc, char** argv) {
     });
     if (!baseAssume.orderEnabled || baseAssume.order != 10) return 56;
 
+    // "Usar a ordem deste cargo na lista de nomes" desligado remove o cargo
+    // da ordenação POR COMPLETO: admin (position 100, sigla [ADM]) com ordem
+    // desligada não pode elevar o usuário acima do Cb (position 50) nem da
+    // base normal (position 10). A hierarquia visual vem só dos cargos ativos.
+    const EffectiveGroupDisplay adminDesligado = effectiveGroupDisplay({
+        {QStringLiteral("[ADM]"), 0, false, false, false, 100},
+        {QStringLiteral("[Cb]"), 13, false, true, false, 50},
+        {QStringLiteral(""), 10, false, true, true, 10}
+    });
+    if (!adminDesligado.orderEnabled || adminDesligado.order != 13) return 57;
+    if (adminDesligado.siglaPosition != 50) return 58;
+    if (adminDesligado.visualPosition != 50) return 59;
+
+    // Só o admin desligado + base implícita: hierarquia visual = normal (10).
+    const EffectiveGroupDisplay adminSozinho = effectiveGroupDisplay({
+        {QStringLiteral("[ADM]"), 0, false, false, false, 100},
+        {QStringLiteral(""), 10, false, true, true, 10}
+    });
+    if (!adminSozinho.orderEnabled || adminSozinho.order != 10) return 60;
+    if (adminSozinho.siglaPosition != 10 || adminSozinho.visualPosition != 10) return 61;
+
+    // Cargo operacional sem sigla (ex.: ROTA) com ordem ativa: define a
+    // hierarquia visual apenas quando nenhum cargo COM sigla participa.
+    const EffectiveGroupDisplay rotaSemSigla = effectiveGroupDisplay({
+        {QStringLiteral("[Cb]"), 13, false, true, false, 50},
+        {QStringLiteral(""), 5, false, true, false, 200}
+    });
+    if (rotaSemSigla.siglaPosition != 50 || rotaSemSigla.visualPosition != 200) return 62;
+
+    const EffectiveGroupDisplay soRota = effectiveGroupDisplay({
+        {QStringLiteral(""), 5, false, true, false, 200}
+    });
+    if (soRota.siglaPosition != 200 || soRota.visualPosition != 200) return 63;
+
     QJsonArray members;
     members << QJsonObject{{QStringLiteral("uid"), QStringLiteral("current-user")},
                            {QStringLiteral("name"), QStringLiteral("Nome antigo")},

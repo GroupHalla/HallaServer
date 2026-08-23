@@ -185,11 +185,13 @@ atribuídos cuja `orderEnabled` esteja ativa, **excluindo os cargos base
 implícitos (guest/normal)** quando pelo menos um cargo explícito participa —
 assim a ordem visual dos cargos reais (patentes etc.) não é arrastada pela
 base; se nenhum cargo participar, `orderEnabled` é `false`. `position` é a
-maior posição hierárquica entre os cargos. `siglaPosition` é a maior posição
-entre os cargos **com sigla visível** (fallback: `position`): clientes novos
-ordenam a lista de clientes por `siglaPosition` (desc), depois `position`
-(desc), depois `order` (asc) e, por fim, apelido — a tag exibida define o
-topo da lista mesmo quando todos dividem um cargo operacional sem sigla.
+maior posição hierárquica entre **todos** os cargos (permissões — não afeta a
+lista). `siglaPosition` é a hierarquia **visual**: a maior posição entre os
+cargos com `orderEnabled` ativo e sigla visível (sem nenhum, a maior posição
+entre os cargos com `orderEnabled` ativo). Cargos com "usar a ordem na lista"
+desligado não contribuem com nada para a ordenação. Clientes novos ordenam a
+lista de clientes por `siglaPosition` (desc), depois `order` (asc) e, por fim,
+apelido.
 
 ### Objeto `group`
 

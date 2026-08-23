@@ -572,7 +572,6 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     QStringList names;
     QList<AssignedGroupDisplay> assignedDisplays;
     int maxPos = 0;
-    int taggedPos = 0; // maior posição entre cargos com sigla visível
     QString firstIcon;
     
     for (int gid : validIds) {
@@ -580,14 +579,11 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         QString nameWithIcon = g.icon.isEmpty() ? g.name : g.icon + QStringLiteral(" ") + g.name;
         names << nameWithIcon;
         assignedDisplays << AssignedGroupDisplay{g.sigla, g.order, g.siglaAfter,
-                                                 g.orderEnabled, implicitBase.contains(gid)};
+                                                 g.orderEnabled, implicitBase.contains(gid),
+                                                 g.position};
         maxPos = qMax(maxPos, g.position);
-        if (!g.sigla.trimmed().isEmpty())
-            taggedPos = qMax(taggedPos, g.position);
         if (firstIcon.isEmpty() && !g.icon.isEmpty()) firstIcon = g.icon;
     }
-    // Sem nenhuma tag visível, a hierarquia da lista segue a posição máxima.
-    if (taggedPos == 0) taggedPos = maxPos;
 
     // A posição hierárquica continua controlando autoridade. A ordem abaixo é
     // somente visual e ignora cargos cujo uso na lista foi desativado, além
@@ -600,7 +596,10 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     c->setGroupOrder(display.order);
     c->setGroupOrderEnabled(display.orderEnabled);
     c->setGroupPosition(maxPos);
-    c->setSiglaPosition(taggedPos);
+    // Hierarquia visual (ordenação da lista): apenas cargos com ordem ativa;
+    // cargos com "Usar a ordem deste cargo na lista de nomes" desligado não
+    // elevam o usuário na lista (nem via sigla, nem via posição).
+    c->setSiglaPosition(display.siglaPosition);
     
     if (announce) {
         QJsonObject m = HProto::msg("user_group");
@@ -613,7 +612,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         m["order"] = display.order;
         m["orderEnabled"] = display.orderEnabled;
         m["position"] = maxPos;
-        m["siglaPosition"] = taggedPos;
+        m["siglaPosition"] = display.siglaPosition;
         broadcast(m);
         syncChannelVisibility(c);
     }
