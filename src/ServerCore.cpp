@@ -996,6 +996,31 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
+    // O apelido é estado persistente da identidade: se este UID já tem um
+    // apelido salvo neste servidor (definido num login anterior ou por
+    // renomeação, própria ou administrativa), ele é restaurado e o nick do
+    // hello é ignorado — assim o nome permanece igual para todos entre
+    // reconexões. Exceção: o apelido salvo em uso por outra identidade
+    // online; nesse caso mantemos o nick pedido para não expulsar um
+    // cliente inocente na checagem de sessão duplicada abaixo.
+    QString effectiveNick = nick;
+    if (m_registry.contains(uid) && validHumanText(m_registry[uid].name, 30, false)) {
+        const QString savedNick = m_registry[uid].name;
+        bool takenByOtherIdentity = false;
+        for (ClientSession* other : m_clients) {
+            if (other->uniqueId() != uid
+                    && other->name().compare(savedNick, Qt::CaseInsensitive) == 0) {
+                takenByOtherIdentity = true;
+                break;
+            }
+        }
+        if (!takenByOtherIdentity && effectiveNick != savedNick) {
+            log(QStringLiteral("Apelido salvo \"%1\" restaurado para a identidade de \"%2\"")
+                    .arg(savedNick, nick));
+            effectiveNick = savedNick;
+        }
+    }
+
     // banido? (por UID ou por IP)
     const QString ip = c->ip().toString();
     for (const BanEntry& b : m_bans) {
@@ -1026,7 +1051,7 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
 
     // Remove qualquer sessão zumbi/duplicada do mesmo usuário (por apelido ou UID)
     for (ClientSession* other : m_clients) {
-        if (other->uniqueId() == uid || other->name().compare(nick, Qt::CaseInsensitive) == 0) {
+        if (other->uniqueId() == uid || other->name().compare(effectiveNick, Qt::CaseInsensitive) == 0) {
             log(QStringLiteral("Sessão duplicada/zumbi de %1 (#%2) removida para nova conexão").arg(other->name()).arg(other->id()));
             
             QJsonObject kicked = HProto::msg("kicked");
@@ -1040,7 +1065,7 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     }
 
     c->setId(m_nextId++);
-    c->setName(nick);
+    c->setName(effectiveNick);
     c->setUid(uid);
     c->setVersion(obj["ver"].toString().left(20));
     c->setPlatform(obj["platform"].toString().left(20));
@@ -1049,7 +1074,7 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     QList<int> gids = m_assignByUid.value(uid);
     int gid = gids.isEmpty() ? 2 : gids.first();
     log(QStringLiteral("DEBUG: Cliente \"%1\" com UID \"%2\" conectando. GID mapeado recuperado: %3")
-            .arg(nick, uid, QString::number(gid)));
+            .arg(effectiveNick, uid, QString::number(gid)));
     if (!m_groups.contains(gid)) gid = 2; // normal
     applyGroup(c, gid, false);
     // A senha administrativa concede acesso total somente durante esta sessão.
@@ -1062,7 +1087,7 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
     m_clients[c->id()] = c;
     addToChannel(c->id(), 1); // entra no canal padrão
     log(QStringLiteral("Cliente #%1 (%2) entrou [grupo: %3]")
-            .arg(c->id()).arg(nick, c->group()));
+            .arg(c->id()).arg(effectiveNick, c->group()));
 
     c->setAvatarHash(m_avatarHash.value(uid)); // v3: avatar salvo
     sendWelcome(c);
@@ -1438,17 +1463,45 @@ void ServerCore::handleStatus(ClientSession* c, const QJsonObject& obj) {
 void ServerCore::handleNick(ClientSession* c, const QJsonObject& obj) {
     const QString name = obj["name"].toString().trimmed();
     if (!validHumanText(name, 30, false)) { sendError(c, "bad_nick", "Apelido inválido"); return; }
-    if (name == c->name()) return;
+
+    // Alvo opcional: renomear outro cliente exige a mesma permissão usada
+    // para mover clientes e respeita a hierarquia de cargos (posições
+    // iguais ou superiores ficam protegidas, como em kick/move_other).
+    ClientSession* target = c;
+    const int targetId = obj["id"].toInt(0);
+    if (targetId > 0 && targetId != c->id()) {
+        if (!hasPerm(c, "move") && !hasPerm(c, "i_client_move_power")) {
+            sendError(c, "no_permission", "Sem permissão para alterar o apelido de outros clientes");
+            return;
+        }
+        ClientSession* other = m_clients.value(targetId, nullptr);
+        if (!other) { sendError(c, "bad_uid", "Cliente não encontrado"); return; }
+        if (!canManageClient(c, other)) {
+            sendError(c, "hierarchy", "Você não pode alterar o apelido deste cliente");
+            return;
+        }
+        target = other;
+    }
+
+    if (name == target->name()) return;
     for (ClientSession* other : m_clients)
-        if (other != c && other->name().compare(name, Qt::CaseInsensitive) == 0) {
+        if (other != target && other->name().compare(name, Qt::CaseInsensitive) == 0) {
             sendError(c, "name_in_use", "Apelido já em uso");
             return;
         }
-    c->setName(name);
-    if (!c->uniqueId().isEmpty() && m_registry.contains(c->uniqueId()))
-        m_registry[c->uniqueId()].name = name;
+    target->setName(name);
+    // O apelido é estado do servidor: persiste por identidade (UID) para
+    // sobreviver a reconexões e reinícios, e ser restaurado no próximo
+    // login desta identidade. A gravação é imediata (upsert no registro).
+    if (!target->uniqueId().isEmpty()) {
+        RegClient& rc = m_registry[target->uniqueId()];
+        if (!rc.firstSeen.isValid()) rc.firstSeen = QDateTime::currentDateTime();
+        rc.name = name;
+        rc.lastSeen = QDateTime::currentDateTime();
+        saveData();
+    }
     QJsonObject m = HProto::msg("user_nick");
-    m["id"] = c->id();
+    m["id"] = target->id();
     m["name"] = name;
     broadcast(m);
 }

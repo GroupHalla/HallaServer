@@ -156,6 +156,18 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 `myPerms` reúne as permissões efetivas de todos os cargos do UID. Para uma
 identidade com privilégio individual total, inclui `"*": true`.
 
+#### Apelido persistente por identidade
+
+O apelido é **estado do servidor**: o último apelido aceito para cada
+identidade fica registrado no banco (`clients`) e é **restaurado no login**.
+O campo `nick` do `hello` é usado apenas na primeira conexão da identidade
+— em reconexões o servidor responde o `welcome` com o apelido salvo, e o
+nome exibido para todos permanece o mesmo. A restauração é pulada quando o
+apelido salvo está em uso por outra identidade online (mantém-se o nick do
+`hello`); renomear (`nick`) atualiza o registro imediatamente e sobrevive a
+reinícios do servidor. Com `id` (renomear outro cliente), o apelido salvo é
+o da **identidade do alvo**.
+
 ### Objeto `user`
 
 ```json
@@ -212,7 +224,7 @@ destino configurado.
 | `voice_hello` | — | Solicita token/UDP (`voice_token`) |
 | `talking` | `on` | Indicador "está falando" (isento de rate limit) |
 | `status` | `mic?`,`spk?`,`away?`,`rec?`,`cc?` | Estados do próprio usuário |
-| `nick` | `name` | Alterar apelido (máx. 30) |
+| `nick` | `name`, `id?` | Alterar apelido (próprio; `id` opcional renomeia outro cliente — exige perm `move` e hierarquia) |
 | `desc` | `text` | Alterar descrição |
 | `poke` | `to`, `msg` | Cutucar cliente |
 | `volume` | `to`, `db` (−40..12) | Informativo (volume é aplicado localmente) |

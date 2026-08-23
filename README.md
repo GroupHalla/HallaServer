@@ -30,6 +30,7 @@ Agradecemos a colaboração de todos no fortalecimento da plataforma.
 - Dados de complementos v5: TLS, isolamento por canal e permissões `pluginData`/`pluginDataGlobal`
 - Reordenação de canais sincronizada uma única vez por operação, sem amplificação N×C
 - Criador de canal temporário administra localmente senha, bitrate, limite e kick de canal
+- Apelido é estado do servidor: o último apelido de cada identidade é restaurado no login (renomeações próprias ou administrativas persistem entre reconexões e reinícios)
 - ServerQuery: TLS, desligado por padrão
 
 ## Execução

@@ -62,6 +62,13 @@ if (UNIX)
                 --server $<TARGET_FILE:halla-server>
     )
     set_tests_properties(plugin-data-integration PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME nick-persistence-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/nick_persistence_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(nick-persistence-integration PROPERTIES TIMEOUT 90)
 endif()
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)
