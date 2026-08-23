@@ -6,9 +6,9 @@
 
 // Propriedades visuais de um cargo atribuído. A posição hierárquica usada
 // para permissões é deliberadamente independente desta política de exibição.
-// "implicitBase" marca os cargos base adicionados automaticamente (guest/
-normal) quando o usuário não os possui explicitamente: eles só entram no
-// cálculo da ordem efetiva se nenhum cargo explícito participar.
+// "implicitBase" marca os cargos base adicionados automaticamente
+// (guest/normal) quando o usuário não os possui explicitamente: eles só
+// entram no cálculo da ordem efetiva se nenhum cargo explícito participar.
 struct AssignedGroupDisplay {
     QString sigla;
     int order = 0;
