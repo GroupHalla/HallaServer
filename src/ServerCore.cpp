@@ -1353,9 +1353,12 @@ void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "hierarchy", "Você só pode mover clientes estritamente abaixo da sua posição");
         return;
     }
-    if (!canViewChannel(c, target) || !canViewChannel(targetClient, target)
-            || !hasChannelPerm(c, target, QStringLiteral("move"))
-            || !hasChannelPerm(targetClient, target, QStringLiteral("join"))) {
+    // A autoridade de QUEM move substitui as permissões de entrada do alvo:
+    // um cliente com move/i_client_move_power e hierarquia pode puxar usuários
+    // para canais nos quais eles mesmos não têm join/view (ex.: canal restrito
+    // ao cargo normal). Só as permissões do executor sobre o destino importam
+    // (ver o canal + move efetivo no canal, com bypass de administrador total).
+    if (!canViewChannel(c, target) || !hasChannelPerm(c, target, QStringLiteral("move"))) {
         sendError(c, "no_permission", "Sem permissão efetiva para mover o cliente para este canal");
         return;
     }

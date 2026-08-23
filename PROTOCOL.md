@@ -229,7 +229,7 @@ destino configurado.
 | `ping` | `ts` | Latência (resposta `pong` com mesmo `ts`) |
 | `chat` | `scope` (`server`/`channel`/`private`), `to?`, `text` | Mensagem de chat |
 | `move` | `channel`, `pass?` | Trocar de canal |
-| `move_other` | `id`, `channel` | Mover outro cliente (perm `move`) |
+| `move_other` | `id`, `channel` | Mover outro cliente (perm `move` + hierarquia). A autoridade de quem move **substitui** as permissões de `join`/`view` do alvo sobre o destino — só as permissões do executor sobre o canal contam (com bypass de administrador total) |
 | `voice_hello` | — | Solicita token/UDP (`voice_token`) |
 | `talking` | `on` | Indicador "está falando" (isento de rate limit) |
 | `status` | `mic?`,`spk?`,`away?`,`rec?`,`cc?` | Estados do próprio usuário |
