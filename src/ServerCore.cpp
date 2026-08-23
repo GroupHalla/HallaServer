@@ -541,10 +541,13 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     if (!gids.contains(groupId) && groupId > 0) {
         gids << groupId;
     }
+    QSet<int> implicitBase;
     if (gids.isEmpty()) {
         gids << 2;
+        implicitBase << 2;
     } else if (!gids.contains(1) && !gids.contains(2)) {
         gids.prepend(2);
+        implicitBase << 2;
     }
     
     QList<int> validIds;
@@ -555,6 +558,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     }
     if (validIds.isEmpty()) {
         validIds << 2;
+        implicitBase << 2;
     }
     
     // Ordena por posição decrescente (maior poder no topo)
@@ -568,19 +572,26 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     QStringList names;
     QList<AssignedGroupDisplay> assignedDisplays;
     int maxPos = 0;
+    int taggedPos = 0; // maior posição entre cargos com sigla visível
     QString firstIcon;
     
     for (int gid : validIds) {
         const GroupDef& g = m_groups[gid];
         QString nameWithIcon = g.icon.isEmpty() ? g.name : g.icon + QStringLiteral(" ") + g.name;
         names << nameWithIcon;
-        assignedDisplays << AssignedGroupDisplay{g.sigla, g.order, g.siglaAfter, g.orderEnabled};
+        assignedDisplays << AssignedGroupDisplay{g.sigla, g.order, g.siglaAfter,
+                                                 g.orderEnabled, implicitBase.contains(gid)};
         maxPos = qMax(maxPos, g.position);
+        if (!g.sigla.trimmed().isEmpty())
+            taggedPos = qMax(taggedPos, g.position);
         if (firstIcon.isEmpty() && !g.icon.isEmpty()) firstIcon = g.icon;
     }
+    // Sem nenhuma tag visível, a hierarquia da lista segue a posição máxima.
+    if (taggedPos == 0) taggedPos = maxPos;
 
     // A posição hierárquica continua controlando autoridade. A ordem abaixo é
-    // somente visual e ignora cargos cujo uso na lista foi desativado.
+    // somente visual e ignora cargos cujo uso na lista foi desativado, além
+    // dos cargos base implícitos quando um cargo explícito participa.
     const EffectiveGroupDisplay display = effectiveGroupDisplay(assignedDisplays);
     c->setGroup(names.join(QStringLiteral("\n")));
     c->setSigla(display.prefixSigla);
@@ -589,6 +600,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     c->setGroupOrder(display.order);
     c->setGroupOrderEnabled(display.orderEnabled);
     c->setGroupPosition(maxPos);
+    c->setSiglaPosition(taggedPos);
     
     if (announce) {
         QJsonObject m = HProto::msg("user_group");
@@ -601,6 +613,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         m["order"] = display.order;
         m["orderEnabled"] = display.orderEnabled;
         m["position"] = maxPos;
+        m["siglaPosition"] = taggedPos;
         broadcast(m);
         syncChannelVisibility(c);
     }

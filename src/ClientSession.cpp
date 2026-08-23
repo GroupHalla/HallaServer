@@ -90,6 +90,7 @@ QJsonObject ClientSession::toJson(bool) const {
     u["order"] = m_groupOrder;
     u["orderEnabled"] = m_groupOrderEnabled;
     u["position"] = m_groupPosition;  // Pilar 1: posição hierárquica
+    u["siglaPosition"] = m_siglaPosition; // hierarquia da tag exibida (ordenação da lista)
     u["mic"] = m_micMuted; u["spk"] = m_spkMuted; u["away"] = m_away;
     u["rec"] = m_recording; u["cc"] = m_commander; u["talking"] = m_talking;
     u["screensharing"] = m_screensharing;

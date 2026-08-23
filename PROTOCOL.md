@@ -174,15 +174,22 @@ o da **identidade do alvo**.
 {"id":5,"name":"Ana","uid":"base64…","ver":"3.6.2","platform":"Windows",
  "desc":"","group":"normal","sigla":"[ADM]","siglaSuffix":"[Fundador]",
  "icon":"base64…","order":1,"orderEnabled":true,
- "gid":3,"position":10,"groupPosition":10,
+ "gid":3,"position":10,"groupPosition":10,"siglaPosition":10,
  "mic":false,"spk":false,"away":false,"rec":false,"cc":false,
  "talking":false,"whispering":false,"screensharing":false,"av":"sha1…"}
 ```
 
 `sigla` contém as siglas efetivas que aparecem antes do nome e
 `siglaSuffix`, as que aparecem depois. `order` é a menor ordem entre os cargos
-atribuídos cuja `orderEnabled` esteja ativa; se nenhum cargo participar,
-`orderEnabled` é `false`.
+atribuídos cuja `orderEnabled` esteja ativa, **excluindo os cargos base
+implícitos (guest/normal)** quando pelo menos um cargo explícito participa —
+assim a ordem visual dos cargos reais (patentes etc.) não é arrastada pela
+base; se nenhum cargo participar, `orderEnabled` é `false`. `position` é a
+maior posição hierárquica entre os cargos. `siglaPosition` é a maior posição
+entre os cargos **com sigla visível** (fallback: `position`): clientes novos
+ordenam a lista de clientes por `siglaPosition` (desc), depois `position`
+(desc), depois `order` (asc) e, por fim, apelido — a tag exibida define o
+topo da lista mesmo quando todos dividem um cargo operacional sem sigla.
 
 ### Objeto `group`
 

@@ -32,6 +32,7 @@ public:
     int groupOrder() const { return m_groupOrder; }
     bool groupOrderEnabled() const { return m_groupOrderEnabled; }
     int groupPosition() const { return m_groupPosition; }  // Pilar 1: posição hierárquica
+    int siglaPosition() const { return m_siglaPosition; } // hierarquia do cargo com tag visível
     QHostAddress ip() const;
 
     bool micMuted() const { return m_micMuted; }
@@ -64,6 +65,7 @@ public:
     void setGroupOrder(int o)               { m_groupOrder = o; }
     void setGroupOrderEnabled(bool enabled) { m_groupOrderEnabled = enabled; }
     void setGroupPosition(int p)            { m_groupPosition = p; }  // Pilar 1
+    void setSiglaPosition(int p)            { m_siglaPosition = p; }
     void setMicMuted(bool v)                { m_micMuted = v; }
     void setSpkMuted(bool v)                { m_spkMuted = v; }
     void setAway(bool v)                    { m_away = v; }
@@ -134,6 +136,7 @@ private:
     int m_groupOrder = 0;
     bool m_groupOrderEnabled = true;
     int m_groupPosition = 0;  // Pilar 1: posição hierárquica do grupo
+    int m_siglaPosition = 0;  // hierarquia do cargo com sigla visível (fallback: position máxima)
     bool m_micMuted = false;
     bool m_spkMuted = false;
     bool m_away = false;

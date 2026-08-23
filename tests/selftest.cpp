@@ -58,6 +58,29 @@ int main(int argc, char** argv) {
     });
     if (disabledOnly.orderEnabled || disabledOnly.order != 100000) return 53;
 
+    // A base implícita "normal" (ordem 10) não pode arrastar a ordem efetiva
+    // quando um cargo explícito participa: patentes (Cabo/3º Sargento etc.)
+    // precisam ordenar entre si pelas próprias ordens visuais.
+    const EffectiveGroupDisplay cabo = effectiveGroupDisplay({
+        {QStringLiteral("[Cb]"), 13, false, true, false},
+        {QStringLiteral(""), 10, false, true, true}
+    });
+    if (!cabo.orderEnabled || cabo.order != 13) return 54;
+
+    // Sem cargo explícito nenhum, a base implícita segue definindo a ordem.
+    const EffectiveGroupDisplay semCargo = effectiveGroupDisplay({
+        {QStringLiteral(""), 10, false, true, true}
+    });
+    if (!semCargo.orderEnabled || semCargo.order != 10) return 55;
+
+    // Cargo explícito com ordem desligada não participa; a base implícita
+    // assume (o usuário continua ordenado pelo "normal" até habilitarem).
+    const EffectiveGroupDisplay baseAssume = effectiveGroupDisplay({
+        {QStringLiteral("[ROTA]"), 5, false, false, false},
+        {QStringLiteral(""), 10, false, true, true}
+    });
+    if (!baseAssume.orderEnabled || baseAssume.order != 10) return 56;
+
     QJsonArray members;
     members << QJsonObject{{QStringLiteral("uid"), QStringLiteral("current-user")},
                            {QStringLiteral("name"), QStringLiteral("Nome antigo")},
