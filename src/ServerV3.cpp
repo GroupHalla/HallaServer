@@ -187,7 +187,36 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
     QJsonObject m = HProto::msg("whisper_ok");
     m["count"] = ids.size();
     c->send(m);
-    // avisa estilo Halla no próprio cliente (UI local mostra o modo)
+
+    // Distribui a chave do canal do remetente para cada alvo do sussurro.
+    //
+    // Os frames de voz trafegam por UDP cifrados com a chave do canal em que
+    // o remetente ESTÁ (não do canal do ouvinte). O welcome só entrega chaves
+    // do canal atual + canais vinculados; portanto, um sussurro cross-canal
+    // (remetente em A, alvo em B, A e B não vinculados) fazia o destinatário
+    // receber o pacote UDP via relay, mas sem a chave para decifrá-lo — áudio
+    // mudava para o alvo. Repassa a chave vigente do canal do remetente para
+    // todos os alvos; o cliente já prova todas as chaves conhecidas na
+    // decodificação, então basta existir no mapa "channelKeys[channelId]".
+    //
+    // Não há risco de eavesdrop: o relay só encaminha frames de voz de A para
+    // os alvos do sussurro; a chave não permite decifrar tráfego que não
+    // chegaria ao cliente de outra forma.
+    const int senderChan = channelOfUser(c->id());
+    if (senderChan > 0 && !ids.isEmpty()) {
+        if (!m_channelKeys.contains(senderChan)) rotateChannelKey(senderChan);
+        if (m_channelKeys.contains(senderChan)) {
+            const QString keyB64 = QString::fromLatin1(m_channelKeys[senderChan].toBase64());
+            QJsonObject km = HProto::msg("channel_key");
+            km["channel"] = senderChan;
+            km["key"] = keyB64;
+            for (const int tid : ids) {
+                if (tid == c->id()) continue;
+                ClientSession* target = m_clients.value(tid, nullptr);
+                if (target) target->send(km);
+            }
+        }
+    }
 }
 
 // =============================================== DADOS DE COMPLEMENTOS (v5)

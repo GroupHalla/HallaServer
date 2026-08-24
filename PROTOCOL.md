@@ -260,7 +260,7 @@ destino configurado.
 | `complaint_add` | `id`, `text` | Registrar reclamação |
 | `complaint_list` | — | Listar reclamações (perm `banList`) |
 | `complaint_clear` | `uid?` | Limpar reclamações |
-| `whisper` | `ids` (array; vazio desativa) | Direcionar voz a usuários específicos |
+| `whisper` | `ids` (array; vazio desativa) | Direcionar voz a usuários específicos. O servidor replica a chave vigente do canal do remetente para cada alvo via `channel_key`, garantindo que o sussurro cross-canal seja decifrável. |
 | `plugin_data` (v5) | `plugin`, `target` (0 canal/1 usuários/2 servidor), `ids?`, `topic`, `data` (base64) | Até 8 KiB; `pluginData` no canal ou `pluginDataGlobal` no servidor |
 | `ft_upload` | `channel`,`name`,`data` (base64 ≤ 1 MiB) | Enviar arquivo (máx. 50/canal, 10 MiB total) |
 | `ft_list` | `channel` | Listar arquivos do canal |

@@ -76,6 +76,13 @@ if (UNIX)
                 --server $<TARGET_FILE:halla-server>
     )
     set_tests_properties(move-bypass-integration PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME whisper-cross-channel-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/whisper_cross_channel_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(whisper-cross-channel-integration PROPERTIES TIMEOUT 90)
 endif()
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)
