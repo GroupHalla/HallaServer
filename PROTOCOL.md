@@ -76,8 +76,17 @@ Regras:
   - mensagem `channel_key { channel, key }` a qualquer momento.
 - **Rotação:** a chave do componente é rotacionada quando vínculos mudam
   (`chan_link`) e quando a composição do canal muda (entrada/saída de
-  usuários), provendo forward secrecy básica. Todos os membros do componente
-  recebem todas as chaves do componente.
+  usuários, incluindo `move`), provendo forward secrecy básica. Todos os
+  membros do componente recebem todas as chaves do componente; **alvos de
+  sussurro fora do componente também recebem as chaves rotacionadas** para
+  continuarem decifrando a voz de quem sussurra a partir dele. Ao entrar em
+  um canal (conexão ou `move`), o cliente recebe a chave vigente do canal
+  destino.
+- **Deduplicação de `whisper`:** reenviar o mesmo conjunto de ids é aceito
+  (`whisper_ok` normal), mas não replica `channel_key` novamente aos alvos.
+- **Alvos desconectados:** quando um cliente cai, seu id de sessão é podado
+  dos conjuntos de sussurro dos demais; o conjunto vazio devolve a voz ao
+  canal normal.
 
 ### Voz e screen share: ChaCha20-Poly1305 (AEAD)
 
@@ -260,7 +269,7 @@ destino configurado.
 | `complaint_add` | `id`, `text` | Registrar reclamação |
 | `complaint_list` | — | Listar reclamações (perm `banList`) |
 | `complaint_clear` | `uid?` | Limpar reclamações |
-| `whisper` | `ids` (array; vazio desativa) | Direcionar voz a usuários específicos. O servidor replica a chave vigente do canal do remetente para cada alvo via `channel_key`, garantindo que o sussurro cross-canal seja decifrável. |
+| `whisper` | `ids` (array; vazio desativa) | Direcionar voz a usuários específicos. O servidor replica a chave vigente do canal do remetente para cada alvo via `channel_key` (também a cada rotação posterior, enquanto o sussurro estiver ativo), garantindo que o sussurro cross-canal seja decifrável. Reenvio idêntico é deduplicado. |
 | `plugin_data` (v5) | `plugin`, `target` (0 canal/1 usuários/2 servidor), `ids?`, `topic`, `data` (base64) | Até 8 KiB; `pluginData` no canal ou `pluginDataGlobal` no servidor |
 | `ft_upload` | `channel`,`name`,`data` (base64 ≤ 1 MiB) | Enviar arquivo (máx. 50/canal, 10 MiB total) |
 | `ft_list` | `channel` | Listar arquivos do canal |

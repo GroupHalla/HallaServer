@@ -83,6 +83,13 @@ if (UNIX)
                 --server $<TARGET_FILE:halla-server>
     )
     set_tests_properties(whisper-cross-channel-integration PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME voice-key-lifecycle-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/voice_key_lifecycle_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(voice-key-lifecycle-integration PROPERTIES TIMEOUT 90)
 endif()
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)

@@ -653,17 +653,27 @@ void ServerCore::onNewConnection() {
 void ServerCore::onClientDisconnected(ClientSession* client) {
     if (!client) return;
     if (client->id() > 0 && m_clients.contains(client->id())) {
+        const int goneId = client->id();
         QJsonObject left = HProto::msg("user_left");
-        left["id"] = client->id();
+        left["id"] = goneId;
         left["reason"] = "dropped";
-        broadcast(left, client->id());
-        removeFromChannels(client->id());
-        m_screenWatchers.remove(client->id());
+        broadcast(left, goneId);
+        removeFromChannels(goneId);
+        m_screenWatchers.remove(goneId);
         for (auto it = m_screenWatchers.begin(); it != m_screenWatchers.end(); ++it)
-            it.value().remove(client->id());
-        m_clients.remove(client->id());
+            it.value().remove(goneId);
+        m_clients.remove(goneId);
+        // Alvos de sussurro apontam para ids de SESSÃO. Quando o alvo cai, o
+        // id morre — quem continuava sussurrando para ele tinha a voz
+        // descartada em silêncio (o relay só encaminhava ao id inexistente).
+        // Remove o id morto dos conjuntos; se o conjunto ficar vazio, a voz
+        // volta ao canal (mesmo comportamento do cliente quando o alvo some).
+        for (ClientSession* other : m_clients) {
+            QSet<int> ids = other->whisperIds();
+            if (ids.remove(goneId) > 0) other->setWhisperIds(ids);
+        }
         releaseVoiceToken(client);
-        log(QStringLiteral("Cliente #%1 (%2) desconectou").arg(client->id()).arg(client->name()));
+        log(QStringLiteral("Cliente #%1 (%2) desconectou").arg(goneId).arg(client->name()));
     }
     client->deleteLater();
 }
@@ -1323,8 +1333,12 @@ void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
         saveData();
     }
 
-    removeFromChannels(c->id());
-    ch.users << c->id();
+    // Entra pelo addToChannel (e não apenas users << id): a entrada rotaciona a
+    // chave do canal destino e entrega a chave vigente a quem chega e a quem
+    // já estava nele. Sem isso, quem movia de canal continuava cifrando a voz
+    // com a chave do canal ANTERIOR — os novos colegas não conseguiam
+    // decifrar e o áudio "sumia" até alguém entrar/sair do canal de novo.
+    addToChannel(c->id(), target);
 
     QJsonObject m = HProto::msg("user_moved");
     m["id"] = c->id();
@@ -2761,6 +2775,33 @@ void ServerCore::rotateChannelKey(int channelId) {
         for (int uid : componentUsers) {
             ClientSession* target = m_clients.value(uid, nullptr);
             if (target) target->send(m);
+        }
+    }
+
+    // Alvos de sussurro FORA do componente também precisam da chave nova: a
+    // voz de quem sussurra continua cifrada com a chave do canal em que o
+    // remetente ESTÁ. Sem esta entrega, qualquer join/leave no canal do
+    // remetente girava a chave e o alvo ficava com a chave antiga — o sussurro
+    // "morria" com o áudio chegando, mas indecifrável (descartado em silêncio).
+    // Mesmo modelo de segurança do handleWhisper: a chave só decifra tráfego
+    // que o relay já encaminharia ao alvo.
+    QSet<int> whisperTargets;
+    for (int uid : componentUsers) {
+        ClientSession* s = m_clients.value(uid, nullptr);
+        if (!s) continue;
+        for (int tid : s->whisperIds())
+            if (!componentUsers.contains(tid)) whisperTargets.insert(tid);
+    }
+    if (!whisperTargets.isEmpty()) {
+        for (int id : component) {
+            if (!m_channels.contains(id)) continue;
+            QJsonObject m = HProto::msg("channel_key");
+            m["channel"] = id;
+            m["key"] = QString::fromLatin1(key.toBase64());
+            for (int tid : whisperTargets) {
+                ClientSession* target = m_clients.value(tid, nullptr);
+                if (target) target->send(m);
+            }
         }
     }
 }

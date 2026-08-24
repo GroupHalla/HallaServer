@@ -183,6 +183,16 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
         const int id = v.toInt();
         if (m_clients.contains(id) && id != c->id()) ids.insert(id);
     }
+    // Deduplicação: clientes antigos reenviavam o mesmo conjunto a cada
+    // user_state (indicador de fala oscilando com VAD) e cada reenvio
+    // empurrava channel_key para todos os alvos de novo. Conjunto idêntico
+    // não muda estado nem precisa de nova entrega de chaves.
+    if (ids == c->whisperIds()) {
+        QJsonObject m = HProto::msg("whisper_ok");
+        m["count"] = ids.size();
+        c->send(m);
+        return;
+    }
     c->setWhisperIds(ids);
     QJsonObject m = HProto::msg("whisper_ok");
     m["count"] = ids.size();
