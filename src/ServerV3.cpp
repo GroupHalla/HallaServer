@@ -198,6 +198,11 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
     m["count"] = ids.size();
     c->send(m);
 
+    // Se o remetente está falando neste instante, os indicadores precisam
+    // ser recalculados para todos: alvos novos acendem o sussurro (laranja),
+    // alvos removidos e o canal voltam ao estado audível real.
+    if (c->talking()) broadcastTalkingState(c);
+
     // Distribui a chave do canal do remetente para cada alvo do sussurro.
     //
     // Os frames de voz trafegam por UDP cifrados com a chave do canal em que

@@ -90,6 +90,13 @@ if (UNIX)
                 --server $<TARGET_FILE:halla-server>
     )
     set_tests_properties(voice-key-lifecycle-integration PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME talking-indicator-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/talking_indicator_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(talking-indicator-integration PROPERTIES TIMEOUT 90)
 endif()
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)

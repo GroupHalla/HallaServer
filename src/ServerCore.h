@@ -228,6 +228,13 @@ private:
     int m_nextChanId = 1;
     QMap<int, QByteArray> m_channelKeys; // channelId -> key (16 bytes)
     void rotateChannelKey(int channelId);
+    // Componente conexo de canais (vínculos em ambos os sentidos) que compartilha
+    // a mesma chave e o mesmo áudio.
+    QSet<int> voiceComponentOf(int channelId) const;
+    // Estado de fala com flags PERSONALIZADAS por destinatário: cada cliente
+    // só acende o indicador de quem realmente escuta (canal/vínculo, ou
+    // sussurro direcionado a ele).
+    void broadcastTalkingState(ClientSession* speaker);
 
     // Cenário 3: grupos, atribuições, chaves usadas, registro de UIDs
     QMap<int, GroupDef> m_groups;            // id -> definição (builtin 1..3, custom >=100)

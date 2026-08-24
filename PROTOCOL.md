@@ -240,7 +240,7 @@ destino configurado.
 | `move` | `channel`, `pass?` | Trocar de canal |
 | `move_other` | `id`, `channel` | Mover outro cliente (perm `move` + hierarquia). A autoridade de quem move **substitui** as permissões de `join`/`view` do alvo sobre o destino — só as permissões do executor sobre o canal contam (com bypass de administrador total) |
 | `voice_hello` | — | Solicita token/UDP (`voice_token`) |
-| `talking` | `on` | Indicador "está falando" (isento de rate limit) |
+| `talking` | `on` | Indicador "está falando" (isento de rate limit). O `user_state` resultante é **personalizado por destinatário**: `talking=true` só para quem escuta a voz do canal do falante; `whispering=true` (com `talking=true`) só para os alvos do sussurro |
 | `status` | `mic?`,`spk?`,`away?`,`rec?`,`cc?` | Estados do próprio usuário |
 | `nick` | `name`, `id?` | Alterar apelido (próprio; `id` opcional renomeia outro cliente — exige perm `move` e hierarquia) |
 | `desc` | `text` | Alterar descrição |
@@ -295,7 +295,7 @@ destino configurado.
 | `user_joined` | `user:{…}` | Cliente entrou |
 | `user_left` | `id`, `reason` (`quit`/`kicked`/`banned`/`dropped`) | Cliente saiu |
 | `user_moved` | `id`, `channel`, `by?` | Trocou de canal |
-| `user_state` / `user_nick` / `user_desc` / `user_group` | `id` + campos | Mudanças de estado/apelido/descrição/grupo (`user_group` inclui `gid`, `sigla`, `siglaSuffix`, `order` e `orderEnabled`) |
+| `user_state` / `user_nick` / `user_desc` / `user_group` | `id` + campos | Mudanças de estado/apelido/descrição/grupo (`user_group` inclui `gid`, `sigla`, `siglaSuffix`, `order` e `orderEnabled`). As transições `talking`/`whispering` refletem a perspectiva AUDITIVA do destinatário (mesma regra do relay de voz: componente do canal, ou alvo de sussurro). O `welcome.users` segue a mesma personalização |
 | `user_avatar` | `id`, `av` (sha-1) | Avatar mudou |
 | `avatar_data` | `uid`, `data` | Resposta a `avatar_get` |
 | `icon_data` | `name`, `data` | Resposta a `icon_get` |

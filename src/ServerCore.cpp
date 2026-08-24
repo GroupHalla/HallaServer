@@ -1200,7 +1200,24 @@ void ServerCore::sendWelcome(ClientSession* c) {
     w["server"] = server;
 
     QJsonArray users;
-    for (ClientSession* o : m_clients) users << o->toJson();
+    // As flags talking/whispering do welcome são PERSONALIZADAS para quem
+    // entra: o novo cliente não deve ver "falando" em gente de canais que
+    // ele não escuta.toJson() carrega o estado global; aqui ajustamos para
+    // a perspectiva auditiva do destinatário (mesma regra do
+    // broadcastTalkingState).
+    const int myWelcomeChannel = channelOfUser(c->id());
+    for (ClientSession* o : m_clients) {
+        QJsonObject u = o->toJson();
+        if (o != c && o->talking()) {
+            const QSet<int> oWhisper = o->whisperIds();
+            const bool whisperTarget = oWhisper.contains(c->id());
+            const bool channelVoice = oWhisper.isEmpty()
+                && voiceComponentOf(channelOfUser(o->id())).contains(myWelcomeChannel);
+            u["talking"] = channelVoice || whisperTarget;
+            u["whispering"] = whisperTarget;
+        }
+        users << u;
+    }
     w["users"] = users;
 
     QJsonArray chans;
@@ -1233,26 +1250,7 @@ void ServerCore::sendWelcome(ClientSession* c) {
     QJsonObject keys;
     const int myChannel = channelOfUser(c->id());
     if (myChannel > 0 && m_channels.contains(myChannel)) {
-        QSet<int> component;
-        QList<int> pending;
-        component.insert(myChannel);
-        pending << myChannel;
-        while (!pending.isEmpty()) {
-            const int current = pending.takeFirst();
-            if (!m_channels.contains(current)) continue;
-            for (int next : m_channels[current].linkedChannels) {
-                if (m_channels.contains(next) && !component.contains(next)) {
-                    component.insert(next);
-                    pending << next;
-                }
-            }
-            for (const SvrChan& candidate : m_channels) {
-                if (candidate.linkedChannels.contains(current) && !component.contains(candidate.id)) {
-                    component.insert(candidate.id);
-                    pending << candidate.id;
-                }
-            }
-        }
+        const QSet<int> component = voiceComponentOf(myChannel);
         for (int id : component) {
             if (!m_channelKeys.contains(id)) rotateChannelKey(id);
             if (m_channelKeys.contains(id))
@@ -1345,6 +1343,10 @@ void ServerCore::handleMove(ClientSession* c, const QJsonObject& obj) {
     m["channel"] = target;
     m["by"] = c->id();
     broadcast(m);
+
+    // Se o usuário mudou de canal no meio da fala, recalcula os indicadores:
+    // o canal antigo para de vê-lo, o novo canal passa a vê-lo.
+    if (c->talking()) broadcastTalkingState(c);
 }
 
 void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
@@ -1385,11 +1387,16 @@ void ServerCore::handleMoveOther(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "channel_password", "Mover para canal protegido exige a permissão de ignorar senha");
         return;
     }
-    removeFromChannels(id);
-    destination.users << id;
+    // Mesma correção do handleMove: entra por addToChannel para receber a
+    // chave vigente do destino (quem é movido também precisa cifrar/decifrar
+    // a voz com a chave nova do canal).
+    addToChannel(id, target);
     QJsonObject m = HProto::msg("user_moved");
     m["id"] = id; m["channel"] = target; m["by"] = c->id();
     broadcast(m);
+
+    // Indicadores de fala recalculados após a mudança de canal do alvo.
+    if (targetClient->talking()) broadcastTalkingState(targetClient);
 }
 
 void ServerCore::handleCommander(ClientSession* c, const QJsonObject& obj) {
@@ -1442,11 +1449,10 @@ void ServerCore::handleTalking(ClientSession* c, const QJsonObject& obj) {
     }
     if (c->talking() != on) {
         c->setTalking(on);
-        QJsonObject u = HProto::msg("user_state");
-        u["id"] = c->id();
-        u["talking"] = on;
-        u["whispering"] = (on && !c->whisperIds().isEmpty());
-        broadcast(u, c->id());
+        // Flags personalizadas por destinatário: quem não escuta (outro canal
+        // sem vínculo e sem sussurro direcionado) recebe false e não mostra
+        // o indicador.
+        broadcastTalkingState(c);
     }
 }
 
@@ -2649,22 +2655,15 @@ QJsonObject ServerCore::voiceStats() const {
     return m_voice ? m_voice->stats() : QJsonObject{};
 }
 
-void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload) {
-    if (!sender || !m_voice || payload.isEmpty()) return;
-    const int chan = channelOfUser(sender->id());
-    if (chan == 0 || !m_channels.contains(chan)) return;
-
-    // A permissão de fala continua sendo avaliada no canal em que o remetente
-    // está. O vínculo somente amplia os canais que escutam esse áudio.
-    if (!canTalkIn(sender, chan)) return;
-
-    // Monta o componente conectado do canal de origem. Isso permite que uma
-    // seleção A+B+C continue funcionando mesmo que os vínculos tenham sido
-    // criados em operações diferentes (A-B e depois B-C).
+// Componente conexo de canais alcançável por vínculos (nos dois sentidos).
+// Usado pela entrega de voz, pela rotação de chaves e pelo indicador de
+// fala — os três precisam da mesma noção de "quem escuta quem".
+QSet<int> ServerCore::voiceComponentOf(int channelId) const {
     QSet<int> linked;
+    if (!m_channels.contains(channelId)) return linked;
     QList<int> pending;
-    linked.insert(chan);
-    pending << chan;
+    linked.insert(channelId);
+    pending << channelId;
     while (!pending.isEmpty()) {
         const int current = pending.takeFirst();
         if (!m_channels.contains(current)) continue;
@@ -2683,6 +2682,49 @@ void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray
             }
         }
     }
+    return linked;
+}
+
+// Distribui o estado de fala de "speaker" com flags PERSONALIZADAS por
+// destinatário. Antes o broadcast era global: qualquer cliente via o
+// indicador "falando" de gente em outros canais que ele não escuta. Agora
+// cada cliente só acende o indicador quando realmente recebe a voz:
+// - canal/vínculo do falante (fala normal, indicador comum);
+// - alvo de sussurro (indicador de sussurro — laranja nos clientes).
+// Quando o falante sussurra, a voz sai SOMENTE para os alvos (relayVoice),
+// então o resto do canal recebe false/false — igual ao áudio real.
+// A mensagem segue indo para todos para limpar estados antigos (alvo removido
+// do sussurro, troca de canal do falante etc.).
+void ServerCore::broadcastTalkingState(ClientSession* speaker) {
+    if (!speaker || speaker->id() == 0) return;
+    const QSet<int> component = voiceComponentOf(channelOfUser(speaker->id()));
+    const QSet<int> whisper = speaker->whisperIds();
+    for (ClientSession* c : m_clients) {
+        if (c == speaker) continue;
+        const bool whisperTarget = whisper.contains(c->id());
+        const bool channelVoice = whisper.isEmpty()
+            && component.contains(channelOfUser(c->id()));
+        QJsonObject u = HProto::msg("user_state");
+        u["id"] = speaker->id();
+        u["talking"] = speaker->talking() && (channelVoice || whisperTarget);
+        u["whispering"] = speaker->talking() && whisperTarget;
+        c->send(u);
+    }
+}
+
+void ServerCore::relayVoice(ClientSession* sender, quint16 seq, const QByteArray& payload) {
+    if (!sender || !m_voice || payload.isEmpty()) return;
+    const int chan = channelOfUser(sender->id());
+    if (chan == 0 || !m_channels.contains(chan)) return;
+
+    // A permissão de fala continua sendo avaliada no canal em que o remetente
+    // está. O vínculo somente amplia os canais que escutam esse áudio.
+    if (!canTalkIn(sender, chan)) return;
+
+    // Monta o componente conectado do canal de origem. Isso permite que uma
+    // seleção A+B+C continue funcionando mesmo que os vínculos tenham sido
+    // criados em operações diferentes (A-B e depois B-C).
+    const QSet<int> linked = voiceComponentOf(chan);
 
     const QSet<int> whisper = sender->whisperIds();   // v3: sussurro para alvos específicos
     const QByteArray packet = HProto::encodeVoiceServer(quint32(sender->id()), seq, payload);
@@ -2728,26 +2770,7 @@ void ServerCore::rotateChannelKey(int channelId) {
     // Para canais vinculados, todos os canais do componente de
     // áudio precisam compartilhar a mesma chave; caso contrário, usuários em
     // canais linkados receberiam frames cifrados com uma chave que não possuem.
-    QSet<int> component;
-    QList<int> pending;
-    component.insert(channelId);
-    pending << channelId;
-    while (!pending.isEmpty()) {
-        const int current = pending.takeFirst();
-        if (!m_channels.contains(current)) continue;
-        for (int next : m_channels[current].linkedChannels) {
-            if (m_channels.contains(next) && !component.contains(next)) {
-                component.insert(next);
-                pending << next;
-            }
-        }
-        for (const SvrChan& candidate : m_channels) {
-            if (candidate.linkedChannels.contains(current) && !component.contains(candidate.id)) {
-                component.insert(candidate.id);
-                pending << candidate.id;
-            }
-        }
-    }
+    const QSet<int> component = voiceComponentOf(channelId);
 
     QByteArray key(32, '\0');
     if (RAND_bytes(reinterpret_cast<unsigned char*>(key.data()), key.size()) != 1) {
