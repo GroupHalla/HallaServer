@@ -1545,7 +1545,12 @@ void ServerCore::handlePoke(ClientSession* c, const QJsonObject& obj) {
     m["fromName"] = c->name();
     m["msg"] = pokeMsg;
     m_clients[to]->send(m);
-    c->send(m); // eco
+    // Eco de confirmação para quem cutucou: marcado com "self" para que os
+    // clientes saibam que é o espelho da própria ação e não um poke recebido
+    // (evita notificação/vibração dupla no remetente).
+    QJsonObject echo = m;
+    echo["self"] = true;
+    c->send(echo);
 }
 
 void ServerCore::handleVolume(ClientSession*, const QJsonObject&) {

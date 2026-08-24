@@ -187,6 +187,16 @@ def main() -> None:
         forbidden = normal.receive("error")
         assert forbidden["code"] in ("no_permission", "hierarchy"), forbidden
 
+        # 5) Poke: o alvo recebe; o remetente recebe APENAS o eco marcado
+        #    com self=true (confirmação), nunca um poke "recebido".
+        admin.send({"t": "poke", "to": normal.id, "msg": "oi do admin"})
+        received = normal.receive("poke",
+            lambda message: not message.get("self", False))
+        assert received["msg"] == "oi do admin", received
+        echo = admin.receive("poke",
+            lambda message: message.get("self", False) is True)
+        assert echo["msg"] == "oi do admin", echo
+
         for client in reversed(clients):
             client.close()
         clients.clear()

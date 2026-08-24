@@ -295,7 +295,7 @@ destino configurado.
 | `complaint_added` / `complaint_list` / `complaint_cleared` | — | Reclamações |
 | `chan_update` | `chan:{…}` | Canal criado/editado |
 | `chan_removed` | `id` | Canal removido |
-| `poke` | `from`, `fromName`, `msg` | Você foi cutucado |
+| `poke` | `from`, `fromName`, `msg`, `self?` | Você foi cutucado (o eco ao remetente vem com `self: true` — confirmação, não um poke recebido) |
 | `kicked` | `reason`, `ban`, `minutes?` | Expulso/banido (conexão encerra em seguida) |
 | `banlist` | `bans:[{uid,ip,name,reason,expires?}]` | Lista de banimentos |
 | `ban_removed` | `uid` | Banimento removido |
