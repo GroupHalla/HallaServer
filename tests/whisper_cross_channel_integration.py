@@ -163,7 +163,9 @@ def main() -> None:
         normal = Client("127.0.0.1", port, work, "WhisperTarget")
         clients.append(normal)
         admin.receive("user_joined")
-        normal.receive("user_joined")
+        # normal never receives its own user_joined (server broadcasts to
+        # OTHER clients only); the user_moved(channel=1) it does receive
+        # for itself is consumed by the predicate below.
 
         # Normal user moves into the new (non-linked) channel B. After this
         # move, removeFromChannels(normal) rotates channel 1's key (so admin
