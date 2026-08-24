@@ -68,3 +68,10 @@ capturava o URL do arquivo `.sha256` e podia enviar conteúdo binário ao consol
 Configure `[webrtc]` no INI ou as variáveis `HALLA_TURN_URL`,
 `HALLA_TURN_USERNAME` e `HALLA_TURN_PASSWORD`. A lista ICE é entregue somente
 a clientes autenticados e anexada às mensagens de signaling.
+
+## Licença
+
+Domínio público ([Unlicense](https://unlicense.org)): livre para todos,
+para tudo — usar, copiar, modificar, vender ou redistribuir, com ou sem
+crédito. Ver [`LICENSE`](LICENSE). Componentes de terceiros (Qt, OpenSSL)
+seguem as respectivas licenças originais.

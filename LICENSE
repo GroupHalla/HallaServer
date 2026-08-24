@@ -1,0 +1,44 @@
+LICENÇA — HALLA (DOMÍNIO PÚBLICO / UNLICENSE)
+=============================================
+
+Este software é livre e sem restrições, dedicado ao domínio público.
+
+Qualquer pessoa está livre para copiar, modificar, publicar, usar,
+compilar, vender ou distribuir este software, em forma de código-fonte ou
+de binário compilado, para qualquer finalidade, comercial ou não, e por
+qualquer meio, sem pedir permissão, sem pagar nada e sem precisar dar
+crédito.
+
+Em jurisdições que reconhecem leis de direitos autorais, os autores deste
+software dedicam ao domínio público todo e qualquer interesse de direito
+autoral sobre ele. Fazemos esta dedicação em benefício do público em
+geral e em detrimento de nossos herdeiros e sucessores. Temos a intenção
+de que esta dedicação seja um ato manifesto de renúncia perpétua, no
+presente e no futuro, a todos os direitos sobre este software sob a lei
+de direitos autorais.
+
+O SOFTWARE É FORNECIDO "COMO ESTÁ", SEM GARANTIA DE QUALQUER TIPO,
+EXPRESSA OU IMPLÍCITA, INCLUINDO, MAS NÃO SE LIMITANDO ÀS GARANTIAS DE
+COMERCIALIZAÇÃO, ADEQUAÇÃO A UMA FINALIDADE ESPECÍFICA E NÃO VIOLAÇÃO.
+EM NENHUM CASO OS AUTORES SERÃO RESPONSÁVEIS POR QUALQUER REIVINDICAÇÃO,
+DANOS OU OUTRA RESPONSABILIDADE, SEJA EM AÇÃO DE CONTRATO, ATO ILÍCITO OU
+OUTRA, DECORRENTE DE, FORA DE OU EM CONEXÃO COM O SOFTWARE OU SEU USO.
+
+Para mais informações, consulte <https://unlicense.org>
+
+
+COMPONENTES DE TERCEIROS
+------------------------
+O código do Halla é domínio público, mas ele depende de componentes de
+terceiros que seguem as respectivas licenças originais (exigidas por
+esses projetos, não por nós):
+
+  * Qt Framework — The Qt Company (LGPL/GPL/Comercial, conforme os
+    módulos utilizados);
+  * Opus codec — BSD 3-Clause (Xiph.Org);
+  * OpenSSL — Apache License 2.0;
+  * libwebrtc — BSD 3-Clause (Google/WebKit);
+  * mbedTLS — Apache License 2.0.
+
+Esses componentes continuam protegidos pelas próprias licenças e pelos
+direitos de seus autores.
