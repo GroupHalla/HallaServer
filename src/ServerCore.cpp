@@ -1071,16 +1071,31 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
         return;
     }
 
-    // Remove qualquer sessão zumbi/duplicada do mesmo usuário (por apelido ou UID)
+    // Apelido em uso por OUTRA identidade online: recusa a entrada e pede
+    // para escolher outro. Antes o recém-chegado "roubava" o apelido e o
+    // cliente inocente era expulso — o comportamento pedido é o inverso:
+    // quem chega com nome já em uso tem que alterar o seu.
     for (ClientSession* other : m_clients) {
-        if (other->uniqueId() == uid || other->name().compare(effectiveNick, Qt::CaseInsensitive) == 0) {
+        if (other->uniqueId() != uid
+                && other->name().compare(effectiveNick, Qt::CaseInsensitive) == 0) {
+            sendError(c, "name_in_use",
+                      QStringLiteral("Este apelido já está em uso — escolha outro"));
+            c->closeAndDelete();
+            return;
+        }
+    }
+
+    // Remove qualquer sessão zumbi/duplicada da MESMA identidade (reconexão
+    // com o mesmo UID): a sessão nova substitui a antiga.
+    for (ClientSession* other : m_clients) {
+        if (other->uniqueId() == uid) {
             log(QStringLiteral("Sessão duplicada/zumbi de %1 (#%2) removida para nova conexão").arg(other->name()).arg(other->id()));
-            
+
             QJsonObject kicked = HProto::msg("kicked");
             kicked["reason"] = "Nova sessão iniciada";
             kicked["ban"] = false;
             other->send(kicked);
-            
+
             doKick(other, "Nova sessão iniciada", true, false);
             break;
         }

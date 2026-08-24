@@ -97,6 +97,13 @@ if (UNIX)
                 --server $<TARGET_FILE:halla-server>
     )
     set_tests_properties(talking-indicator-integration PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME nick-in-use-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/nick_in_use_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(nick-in-use-integration PROPERTIES TIMEOUT 90)
 endif()
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)

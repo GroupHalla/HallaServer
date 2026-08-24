@@ -132,7 +132,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 |---|---|---|---|
 | `server_probe` | C→S | — | Consulta pública (via TLS); não cria sessão |
 | `server_probe` | S→C | `server:{name,motd,ver,maxClients}`, `clients`, `maxClients` | Resposta |
-| `hello` | C→S | `proto` (1..5), `uid`, `nick`, `idPub` (base64 DER), `pass?`, `adminPass?`, `ver`, `platform` | Login |
+| `hello` | C→S | `proto` (1..5), `uid`, `nick`, `idPub` (base64 DER), `pass?`, `adminPass?`, `ver`, `platform` | Login. Apelido vazio → `bad_nick`; apelido em uso por OUTRA identidade online → `name_in_use` (conexão encerrada; o titular mantém o nome). Reconexão com o MESMO `uid` substitui a sessão anterior |
 | `identity_challenge` | S→C | `nonce` (base64, 32 B) | Desafio Ed25519 |
 | `identity_proof` | C→S | `sig` (base64) | Assinatura do nonce |
 | `welcome` | S→C | ver abaixo | Estado completo após login |
