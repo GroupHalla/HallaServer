@@ -26,6 +26,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import select
 import shutil
 import signal
 import socket
@@ -114,18 +115,23 @@ class Client:
         raise AssertionError(f"timeout waiting for {message_type}")
 
     def quiet_for(self, seconds: float, channel: int | None = None) -> list[dict]:
-        """Collects every message arriving within the window (short socket
-        timeout). With `channel`, returns only channel_key messages for that
-        channel. Used to assert that NOTHING (e.g. no duplicate or stale
-        channel_key) is pushed."""
-        self.socket.settimeout(seconds)
+        """Collects every message arriving within the window without ever
+        letting a socket timeout fire mid-read (a timeout during readline()
+        leaves an SSL stream unusable — "cannot read from timed out object").
+        select() is used so readline() only runs when data is pending. With
+        `channel`, returns only channel_key messages for that channel. Used
+        to assert that NOTHING (e.g. no duplicate or stale channel_key) is
+        pushed."""
         collected: list[dict] = []
         deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            try:
-                line = self.stream.readline()
-            except (TimeoutError, socket.timeout, OSError):
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
+            readable, _, _ = select.select([self.socket], [], [], remaining)
+            if not readable:
+                break
+            line = self.stream.readline()
             if not line:
                 break
             message = json.loads(line)
@@ -134,7 +140,6 @@ class Client:
                 if channel is not None and int(message["channel"]) != channel:
                     continue
             collected.append(message)
-        self.socket.settimeout(5)
         return collected
 
     def close(self) -> None:
