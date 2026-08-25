@@ -71,7 +71,8 @@ a clientes autenticados e anexada às mensagens de signaling.
 
 ## Licença
 
-Domínio público ([Unlicense](https://unlicense.org)): livre para todos,
-para tudo — usar, copiar, modificar, vender ou redistribuir, com ou sem
-crédito. Ver [`LICENSE`](LICENSE). Componentes de terceiros (Qt, OpenSSL)
-seguem as respectivas licenças originais.
+Livre para uso não comercial ([`LICENSE`](LICENSE)): usar, estudar,
+modificar e redistribuir gratuitamente, sem pedir permissão. Vender,
+alugar ou embutir em produto comercial exige autorização escrita dos
+mantenedores. Componentes de terceiros (Qt, OpenSSL) seguem as
+respectivas licenças originais.
