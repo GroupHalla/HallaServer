@@ -25,6 +25,10 @@ public:
     QString platform() const { return m_platform; }
     QString description() const { return m_desc; }
     QString group() const { return m_group; }
+    // Só os NOMES dos cargos (sem "<icone> <nome>") — para o log do console
+    // do servidor, que não deve exibir nome de arquivo de ícone
+    // ("rota.png ROTA" virava lixo visual no terminal).
+    QString groupNames() const { return m_groupNames; }
     int groupId() const { return m_groupId; }
     QString sigla() const { return m_sigla; }
     QString siglaSuffix() const { return m_siglaSuffix; }
@@ -58,6 +62,7 @@ public:
     void setVersion(const QString& v)       { m_version = v; }
     void setPlatform(const QString& p)      { m_platform = p; }
     void setGroup(const QString& g)         { m_group = g; }
+    void setGroupNames(const QString& g)    { m_groupNames = g; }
     void setGroupId(int g)                  { m_groupId = g; }
     void setSigla(const QString& s)         { m_sigla = s; }
     void setSiglaSuffix(const QString& s)   { m_siglaSuffix = s; }
@@ -129,6 +134,7 @@ private:
     QString m_platform;
     QString m_desc;
     QString m_group = "normal";
+    QString m_groupNames = QStringLiteral("normal");
     int m_groupId = 2;
     QString m_sigla;
     QString m_siglaSuffix;

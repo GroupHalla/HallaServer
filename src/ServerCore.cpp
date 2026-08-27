@@ -570,6 +570,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     c->setGroupId(primaryGid);
     
     QStringList names;
+    QStringList namesOnly; // só o NOME do cargo — log do console do servidor
     QList<AssignedGroupDisplay> assignedDisplays;
     int maxPos = 0;
     QString firstIcon;
@@ -578,6 +579,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
         const GroupDef& g = m_groups[gid];
         QString nameWithIcon = g.icon.isEmpty() ? g.name : g.icon + QStringLiteral(" ") + g.name;
         names << nameWithIcon;
+        namesOnly << g.name;
         assignedDisplays << AssignedGroupDisplay{g.sigla, g.order, g.siglaAfter,
                                                  g.orderEnabled, implicitBase.contains(gid),
                                                  g.position};
@@ -590,6 +592,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     // dos cargos base implícitos quando um cargo explícito participa.
     const EffectiveGroupDisplay display = effectiveGroupDisplay(assignedDisplays);
     c->setGroup(names.join(QStringLiteral("\n")));
+    c->setGroupNames(namesOnly.join(QStringLiteral(", ")));
     c->setSigla(display.prefixSigla);
     c->setSiglaSuffix(display.suffixSigla);
     c->setIcon(firstIcon);
@@ -1123,8 +1126,11 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
 
     m_clients[c->id()] = c;
     addToChannel(c->id(), 1); // entra no canal padrão
+    // Log com só os NOMES dos cargos — c->group() carrega "<icone> <nome>"
+    // por cargo (protocolo: o cliente separa ícone de nome) e imprimia
+    // "[grupo: rota.png ROTA\nCabo\nnormal]" no console do servidor.
     log(QStringLiteral("Cliente #%1 (%2) entrou [grupo: %3]")
-            .arg(c->id()).arg(effectiveNick, c->group()));
+            .arg(c->id()).arg(effectiveNick, c->groupNames()));
 
     c->setAvatarHash(m_avatarHash.value(uid)); // v3: avatar salvo
     sendWelcome(c);
