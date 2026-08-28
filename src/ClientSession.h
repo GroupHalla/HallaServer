@@ -77,6 +77,8 @@ public:
     void setRecording(bool v)               { m_recording = v; }
     void setCommander(bool v)               { m_commander = v; }
     void setTalking(bool v)                 { m_talking = v; }
+    qint64 lastTalkingBroadcastMs() const   { return m_lastTalkingBroadcastMs; }
+    void setLastTalkingBroadcastMs(qint64 v){ m_lastTalkingBroadcastMs = v; }
     void setScreensharing(bool v)           { m_screensharing = v; }
     void setUdpEndpoint(const QHostAddress& addr, quint16 port) {
         m_udpAddr = addr; m_udpPort = port; m_lastUdpSeen = QDateTime::currentDateTimeUtc();
@@ -149,6 +151,7 @@ private:
     bool m_recording = false;
     bool m_commander = false;
     bool m_talking = false;
+    qint64 m_lastTalkingBroadcastMs = 0; // última re-transmissão de cura do estado de fala
     bool m_screensharing = false;
     QHostAddress m_udpAddr;
     quint16 m_udpPort = 0;

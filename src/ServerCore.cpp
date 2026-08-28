@@ -1474,6 +1474,18 @@ void ServerCore::handleTalking(ClientSession* c, const QJsonObject& obj) {
         // sem vínculo e sem sussurro direcionado) recebe false e não mostra
         // o indicador.
         broadcastTalkingState(c);
+    } else if (on) {
+        // Cura de estado dessincronizado: o app do falante pode ter sido
+        // congelado/reiniciado no meio de uma fala (estado local zerado sem
+        // enviar "false") e o servidor ficou com talking=true. Quando ele
+        // transmite de novo, o dedup acima engoliria a mensagem e NINGUÉM
+        // receberia o estado — o áudio fluiria pelo UDP sem o símbolo de
+        // "falando". Reenvia o estado a todos, no máximo 1x/segundo.
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - c->lastTalkingBroadcastMs() >= 1000) {
+            c->setLastTalkingBroadcastMs(now);
+            broadcastTalkingState(c);
+        }
     }
 }
 
