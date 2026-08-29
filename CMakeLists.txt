@@ -111,6 +111,13 @@ if (UNIX)
                 --server $<TARGET_FILE:halla-server>
     )
     set_tests_properties(voice-relay-integration PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME multi-role-icons-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/multi_role_icons_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(multi-role-icons-integration PROPERTIES TIMEOUT 90)
 endif()
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)

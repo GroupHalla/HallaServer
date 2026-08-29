@@ -573,8 +573,13 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     QStringList namesOnly; // só o NOME do cargo — log do console do servidor
     QList<AssignedGroupDisplay> assignedDisplays;
     int maxPos = 0;
-    QString firstIcon;
-    
+    // TODOS os ícones dos cargos atribuídos (na ordem de hierarquia), não só o
+    // do cargo mais alto: o cliente separa o campo "icon" por vírgula e exibe
+    // um ícone por cargo ao lado do nome (ServerTreeWidget divide em [,;]).
+    // Nomes de ícone nunca contêm "," ou ";" (sanitizeFileName no upload e
+    // group_set filtra), então a vírgula é um separador não-ambíguo.
+    QStringList icons;
+
     for (int gid : validIds) {
         const GroupDef& g = m_groups[gid];
         QString nameWithIcon = g.icon.isEmpty() ? g.name : g.icon + QStringLiteral(" ") + g.name;
@@ -584,7 +589,9 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
                                                  g.orderEnabled, implicitBase.contains(gid),
                                                  g.position};
         maxPos = qMax(maxPos, g.position);
-        if (firstIcon.isEmpty() && !g.icon.isEmpty()) firstIcon = g.icon;
+        // Ícones duplicados (dois cargos com o mesmo símbolo) aparecem uma vez.
+        const QString cleanIcon = QString(g.icon).remove(QLatin1Char(',')).remove(QLatin1Char(';')).trimmed();
+        if (!cleanIcon.isEmpty() && !icons.contains(cleanIcon)) icons << cleanIcon;
     }
 
     // A posição hierárquica continua controlando autoridade. A ordem abaixo é
@@ -595,7 +602,7 @@ void ServerCore::applyGroup(ClientSession* c, int groupId, bool announce) {
     c->setGroupNames(namesOnly.join(QStringLiteral(", ")));
     c->setSigla(display.prefixSigla);
     c->setSiglaSuffix(display.suffixSigla);
-    c->setIcon(firstIcon);
+    c->setIcon(icons.join(QStringLiteral(",")));
     c->setGroupOrder(display.order);
     c->setGroupOrderEnabled(display.orderEnabled);
     c->setGroupPosition(maxPos);
@@ -2199,6 +2206,13 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
     const QString name = obj["name"].toString().trimmed().left(30);
     const QJsonObject perms = obj["perms"].toObject();
 
+    // O campo "icon" pode listar VÁRIOS ícones por usuário (um por cargo,
+    // separados por vírgula — ver applyGroup). A vírgula e o ponto e vírgula
+    // são reservados como separador: remover aqui garante que nenhum nome de
+    // ícone individual seja capaz de quebrar a lista no cliente.
+    const QString iconValue = QString(obj["icon"].toString()).left(128)
+            .remove(QLatin1Char(',')).remove(QLatin1Char(';')).trimmed();
+
     auto validateName = [&](int groupId, const QString& proposedName) {
         if (proposedName.isEmpty()) return true;
         const bool usesAdminName = proposedName.compare(
@@ -2265,7 +2279,7 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         if (obj.contains("siglaAfter")) g.siglaAfter = obj["siglaAfter"].toBool(false);
         if (obj.contains("order")) g.order = obj["order"].toInt(0);
         if (obj.contains("orderEnabled")) g.orderEnabled = obj["orderEnabled"].toBool(true);
-        if (obj.contains("icon")) g.icon = obj["icon"].toString().left(128);
+        if (obj.contains("icon")) g.icon = iconValue;
         if (obj.contains("position")) g.position = requestedPosition;
         m_groups[id] = g;
     } else {
@@ -2288,7 +2302,7 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         g.siglaAfter = obj["siglaAfter"].toBool(false);
         g.order = obj["order"].toInt(0);
         g.orderEnabled = obj["orderEnabled"].toBool(true);
-        g.icon = obj["icon"].toString().left(128);
+        g.icon = iconValue;
         g.position = obj["position"].toInt(g.order * 10);
         if (!HierarchyPolicy::canSetGroupPosition(superAdmin, executorPosition, g.position)) {
             sendError(c, "hierarchy", "O novo cargo deve ficar estritamente abaixo do seu");
