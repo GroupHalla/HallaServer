@@ -152,7 +152,7 @@ class Client:
         self.udp.settimeout(max(0.05, timeout / 6))
         while time.monotonic() < deadline:
             try:
-                data, _addr = self.udp.recv(65536)
+                data, _addr = self.udp.recvfrom(65536)
             except socket.timeout:
                 continue
             if len(data) < 10 or data[:4] != b"HALL":
@@ -255,7 +255,7 @@ def main() -> None:
         admin.send({"t": "chan_link", "ids": [1, channel_b], "link": True})
         admin.receive("chan_update",
                       lambda m: m.get("chan", {}).get("id") == 1
-                      and channel_b in m.get("chan", {}).get("linkedChannels", []))
+                      and channel_b in m.get("chan", {}).get("linked", []))
         time.sleep(0.2)
         for client in clients:
             client.drain_udp()
@@ -271,7 +271,7 @@ def main() -> None:
         admin.send({"t": "chan_link", "ids": [1, channel_b], "link": False})
         admin.receive("chan_update",
                       lambda m: m.get("chan", {}).get("id") == 1
-                      and channel_b not in m.get("chan", {}).get("linkedChannels", []))
+                      and channel_b not in m.get("chan", {}).get("linked", []))
         time.sleep(0.2)
         for client in clients:
             client.drain_udp()
