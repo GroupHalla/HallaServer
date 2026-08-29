@@ -295,13 +295,18 @@ def main() -> None:
         time.sleep(0.2)
         for client in clients:
             client.drain_udp()
+        # Charlie fala a partir do canal B. Bravo, que ACABOU de se mudar
+        # para B, precisa passar a receber (cache usuario->canal atualizado
+        # pelo move); Alfa, que ficou no canal 1 (desvinculado), nao recebe.
         marker4 = b"RELAY-FOUR-"
         for i in range(6):
-            alfa.send_voice(marker4 + str(i).encode())
-        got_bravo = bravo.collect_voice(alfa.id)
-        got_charlie = charlie.collect_voice(alfa.id)
-        expect("Bravo (moved away) no longer receives", not got_bravo)
-        expect("Charlie (now same channel) receives", len(got_charlie) >= 3)
+            charlie.send_voice(marker4 + str(i).encode())
+        got_bravo = bravo.collect_voice(charlie.id)
+        got_alfa = alfa.collect_voice(charlie.id)
+        expect("Bravo (mudou para B) ouve Charlie em B", len(got_bravo) >= 3)
+        expect("frames do canal B relayed verbatim",
+               all(frame.startswith(marker4) for frame in got_bravo))
+        expect("Alfa (canal 1, desvinculado) continua isolado", not got_alfa)
 
         print("phase 5 — chan_delete dumps users into channel 1 via direct append")
         admin.send({"t": "chan_delete", "id": channel_b})
@@ -317,8 +322,8 @@ def main() -> None:
             alfa.send_voice(marker5 + str(i).encode())
         got_bravo = bravo.collect_voice(alfa.id)
         got_charlie = charlie.collect_voice(alfa.id)
-        expect("Bravo receives again after channel deletion", len(got_bravo) >= 3)
-        expect("Charlie receives again after channel deletion", len(got_charlie) >= 3)
+        expect("Bravo recebe Alfa de volta após excluir o canal B", len(got_bravo) >= 3)
+        expect("Charlie recebe Alfa de volta após excluir o canal B", len(got_charlie) >= 3)
 
         print("voice relay integration: ALL CHECKS PASSED")
     finally:
