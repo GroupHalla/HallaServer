@@ -704,6 +704,7 @@ void ServerCore::checkIdleClients() {
     QList<int> linkAffected;
     for (int id : toRemove) {
         m_channels.remove(id);
+        bumpChannelTopology();
         for (SvrChan& other : m_channels) {
             if (other.linkedChannels.removeAll(id) > 0 && !linkAffected.contains(other.id))
                 linkAffected << other.id;
@@ -1707,6 +1708,7 @@ void ServerCore::handleChanCreate(ClientSession* c, const QJsonObject& obj) {
         }
     }
     m_channels[ch.id] = ch;
+    bumpChannelTopology(); // novo canal entra na topologia de voz
     saveData();
 
     for (int clearedId : clearedTempParents) {
@@ -1826,6 +1828,7 @@ void ServerCore::handleChanLink(ClientSession* c, const QJsonObject& obj) {
             }
         }
     }
+    bumpChannelTopology(); // vínculos mudaram: componente de voz recalculado
 
     // Alterar vínculos muda o conjunto de ouvintes; rotaciona a chave dos
     // componentes afetados para manter forward secrecy básica.
@@ -1984,11 +1987,13 @@ void ServerCore::handleChanDelete(ClientSession* c, const QJsonObject& obj) {
     for (int uid : m_channels[id].users) {
         removeFromChannels(uid);
         m_channels[1].users << uid;
+        m_userChannelCache[uid] = 1;
         QJsonObject m = HProto::msg("user_moved");
         m["id"] = uid; m["channel"] = 1; m["by"] = 0;
         broadcast(m);
     }
     m_channels.remove(id);
+    bumpChannelTopology();
     QList<int> linkAffected;
     for (SvrChan& other : m_channels) {
         if (other.linkedChannels.removeAll(id) > 0) linkAffected << other.id;
@@ -2473,6 +2478,7 @@ void ServerCore::doKick(ClientSession* c, const QString& reason, bool fromServer
     if (!fromServer && !ban) {
         // kick de canal: usuário continua conectado, volta ao padrão
         m_channels[1].users << c->id();
+        m_userChannelCache[c->id()] = 1;
         QJsonObject m = HProto::msg("user_moved");
         m["id"] = c->id(); m["channel"] = 1; m["by"] = 0;
         m["reason"] = reason;
@@ -2503,12 +2509,22 @@ void ServerCore::broadcast(const QJsonObject& obj, int exceptId) {
 }
 
 int ServerCore::channelOfUser(int userId) const {
+    // Caminho quente do relay de voz (remetente + cada destinatário em todos
+    // os pacotes): O(1) pelo cache, com varredura só no miss — um acesso direto
+    // a SvrChan::users fora dos chokepoints nunca devolve canal errado porque
+    // o miss repovoa o cache com a fonte da verdade.
+    const auto cached = m_userChannelCache.constFind(userId);
+    if (cached != m_userChannelCache.constEnd()) return cached.value();
     for (const SvrChan& c : m_channels)
-        if (c.users.contains(userId)) return c.id;
+        if (c.users.contains(userId)) {
+            m_userChannelCache.insert(userId, c.id);
+            return c.id;
+        }
     return 0;
 }
 
 void ServerCore::removeFromChannels(int userId) {
+    m_userChannelCache.remove(userId);
     for (SvrChan& c : m_channels) {
         if (c.users.contains(userId)) {
             c.users.removeAll(userId);
@@ -2521,6 +2537,7 @@ void ServerCore::addToChannel(int userId, int channelId) {
     removeFromChannels(userId);
     if (m_channels.contains(channelId)) {
         m_channels[channelId].users << userId;
+        m_userChannelCache[userId] = channelId;
         rotateChannelKey(channelId);
     }
 }
@@ -2694,6 +2711,16 @@ QJsonObject ServerCore::voiceStats() const {
 QSet<int> ServerCore::voiceComponentOf(int channelId) const {
     QSet<int> linked;
     if (!m_channels.contains(channelId)) return linked;
+    // A topologia de vínculos muda raramente (criar/excluir canal, link/unlink)
+    // e o relay de voz pede o componente a cada pacote: serve do cache e
+    // invalida tudo de uma vez quando a revisão de topologia muda.
+    if (m_voiceComponentCacheRev != m_channelTopologyRev) {
+        m_voiceComponentCache.clear();
+        m_voiceComponentCacheRev = m_channelTopologyRev;
+    } else {
+        const auto cached = m_voiceComponentCache.constFind(channelId);
+        if (cached != m_voiceComponentCache.constEnd()) return cached.value();
+    }
     QList<int> pending;
     linked.insert(channelId);
     pending << channelId;
@@ -2715,6 +2742,7 @@ QSet<int> ServerCore::voiceComponentOf(int channelId) const {
             }
         }
     }
+    m_voiceComponentCache.insert(channelId, linked);
     return linked;
 }
 

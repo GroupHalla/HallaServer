@@ -16,8 +16,17 @@ bool VoiceRelay::bind(quint16 port) {
                         .arg(port).arg(m_socket->errorString()));
         return false;
     }
+    // Buffers generosos: rajadas de voz (vários falantes, 50 pacotes/s cada)
+    // somadas a picos da event loop (handshakes TLS, broadcasts) não podem
+    // transbordar o soquete — pacote perdido aqui vira "pipocada" no cliente.
+    // O Windows começa com ~64 KiB de receive buffer, pouco para esse caso.
+    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, 1024 * 1024);
+    m_socket->setSocketOption(QAbstractSocket::SendBufferSizeSocketOption, 1024 * 1024);
+    const qint64 rcv = m_socket->socketOption(QAbstractSocket::ReceiveBufferSizeSocketOption).toLongLong();
+    const qint64 snd = m_socket->socketOption(QAbstractSocket::SendBufferSizeSocketOption).toLongLong();
+    m_core->log(QStringLiteral("Voz UDP escutando na porta %1 (buffers rcv=%2 KiB snd=%3 KiB)")
+                    .arg(port).arg(rcv / 1024).arg(snd / 1024));
     connect(m_socket, &QUdpSocket::readyRead, this, &VoiceRelay::onReadyRead);
-    m_core->log(QStringLiteral("Voz UDP escutando na porta %1").arg(port));
     return true;
 }
 

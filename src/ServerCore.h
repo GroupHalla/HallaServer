@@ -226,11 +226,25 @@ private:
     };
     QMap<int, SvrChan> m_channels;
     int m_nextChanId = 1;
+    // Cache userId -> canal corrente. O relay de voz resolve o canal do
+    // remetente e de cada destinatário em TODOS os pacotes (50/s por falante):
+    // a varredura linear em m_channels virava O(canais) por pacote. Mantido
+    // por addToChannel/removeFromChannels; channelOfUser ainda cai na
+    // varredura quando um acesso direto a SvrChan::users escapa do cache.
+    mutable QMap<int, int> m_userChannelCache;
     QMap<int, QByteArray> m_channelKeys; // channelId -> key (16 bytes)
     void rotateChannelKey(int channelId);
     // Componente conexo de canais (vínculos em ambos os sentidos) que compartilha
     // a mesma chave e o mesmo áudio.
     QSet<int> voiceComponentOf(int channelId) const;
+    // O componente é determinístico a partir dos vínculos, que mudam raramente
+    // (criar/excluir canal, link/unlink). Como relayVoice e broadcastTalkingState
+    // recalculam o componente a cada pacote de voz, guardamos o resultado por
+    // canal e invalidamos tudo com um contador de revisão de topologia.
+    mutable QMap<int, QSet<int>> m_voiceComponentCache;
+    mutable quint64 m_voiceComponentCacheRev = 0;
+    quint64 m_channelTopologyRev = 1;
+    void bumpChannelTopology() { ++m_channelTopologyRev; }
     // Estado de fala com flags PERSONALIZADAS por destinatário: cada cliente
     // só acende o indicador de quem realmente escuta (canal/vínculo, ou
     // sussurro direcionado a ele).
