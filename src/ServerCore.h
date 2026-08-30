@@ -260,6 +260,8 @@ private:
 
     QList<BanEntry> m_bans;
     QTimer* m_idleTimer = nullptr;
+    QTimer* m_saveDebounceTimer = nullptr;   // coalescência de saveData()
+    qint64 m_saveDeferredSinceMs = 0;        // limite de adiamento da gravação
 
     // ---- v3: avatares, offline, reclamações, arquivos
     QMap<QString, QString> m_avatarHash;            // uid -> hash ("" = sem avatar)
@@ -290,6 +292,11 @@ private:
 
     void loadData();
     void saveData();
+    // Gravação com coalescência: rajadas de edição administrativa (arrastar
+    // um cargo renumera dezenas de registros) viram UMA regravação do banco,
+    // em vez de uma transação completa por mensagem — o event loop não trava
+    // e a voz não corta durante a reordenação.
+    void scheduleSave();
     void loadBans();
     void saveBans();
 
@@ -316,6 +323,7 @@ private:
     void handleVolume(ClientSession* c, const QJsonObject& obj);
     void handleGroupList(ClientSession* c);
     void handleGroupSet(ClientSession* c, const QJsonObject& obj);
+    void handleGroupReorder(ClientSession* c, const QJsonObject& obj);
     void handleGroupDelete(ClientSession* c, const QJsonObject& obj);
     void handleClientSetGroup(ClientSession* c, const QJsonObject& obj);
     void handleServerEdit(ClientSession* c, const QJsonObject& obj);
@@ -366,6 +374,11 @@ private:
     void sendError(ClientSession* c, const QString& code, const QString& msg);
     void broadcast(const QJsonObject& obj, int exceptId = -1);
     void broadcastGroups();
+    // Lista de membros (com estado online) de um único cargo, no mesmo
+    // formato do group_list completo — usada pelo handleGroupList e pelo
+    // broadcast group_member_update.
+    QJsonArray groupMembersJson(int gid) const;
+    void broadcastGroupMembers(int gid);
     void sendWelcome(ClientSession* c);
     void ensureVoiceToken(ClientSession* c);
     void releaseVoiceToken(ClientSession* c);

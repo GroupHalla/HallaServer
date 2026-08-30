@@ -258,6 +258,7 @@ destino configurado.
 | `unban` | `uid` | Remover banimento (perm `ban`) |
 | `group_list` | — | Lista grupos e permissões |
 | `group_set` | `id?`,`name?`,`perms?`,`sigla?`,`siglaAfter?`,`order?`,`orderEnabled?`,`icon?`,`position?` | Criar/editar grupo (perm `groupEdit`) |
+| `group_reorder` | `list:[{id,order?,position?}]` | Reordenar vários cargos em lote — uma única gravação/broadcast (perm `groupEdit`; validação transacional: ou toda a lista é aceita, ou nada muda) |
 | `group_delete` | `id` | Excluir grupo custom (id ≥ 100) |
 | `client_set_group` | `id?` ou `uid?`, `gid`, `op?` (`add`/`remove`; ausente = toggle legado) | Adicionar ou remover cargo persistente por UID |
 | `server_edit` | `name?`,`motd?`,`banner?` (base64; vazio remove) | Editar servidor (perm `serverEdit`) |
@@ -308,8 +309,10 @@ destino configurado.
 | `kicked` | `reason`, `ban`, `minutes?` | Expulso/banido (conexão encerra em seguida) |
 | `banlist` | `bans:[{uid,ip,name,reason,expires?}]` | Lista de banimentos |
 | `ban_removed` | `uid` | Banimento removido |
-| `group_list` | `groups:[…]` | Broadcast quando grupos mudam |
+| `group_list` | `groups:[…]` | Broadcast quando grupos mudam (sem `members`; a resposta a um `group_list` do cliente inclui `members` por cargo) |
 | `group_set_ok` | `group:{…}` | Confirma ao editor os valores efetivamente aplicados ao cargo |
+| `group_reorder_ok` | `count` | Confirma a reordenação em lote de N cargos |
+| `group_member_update` | `gid`, `members:[{uid,name,online,id?}]` | Broadcast: lista de membros de um cargo mudou (atribuição/remoção) — atualiza os painéis em tempo real |
 | `privilege_granted` | `individual`, `myPerms` | Confirma a chave e atualiza imediatamente as permissões efetivas |
 | `server_edit` | `name`,`motd`,`banner?` | Servidor renomeado/MOTD/banner mudou |
 | `whisper_ok` | `count` | Sussurro ativado para N usuários |

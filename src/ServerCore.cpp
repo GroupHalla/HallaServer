@@ -147,6 +147,10 @@ ServerCore::ServerCore(QObject* parent) : QObject(parent) {
 }
 
 ServerCore::~ServerCore() {
+    // Uma gravação pendente do debounce precisa ser executada antes do
+    // estado em memória ser destruído.
+    if (m_saveDebounceTimer && m_saveDebounceTimer->isActive())
+        m_saveDebounceTimer->stop();
     saveData();
     saveBans();
 
@@ -821,6 +825,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "volume")      handleVolume(c, obj);
     else if (t == "group_list")  handleGroupList(c);
     else if (t == "group_set")   handleGroupSet(c, obj);
+    else if (t == "group_reorder") handleGroupReorder(c, obj);
     else if (t == "group_delete") handleGroupDelete(c, obj);
     else if (t == "client_set_group") handleClientSetGroup(c, obj);
     else if (t == "server_edit") handleServerEdit(c, obj);
@@ -2150,44 +2155,71 @@ void ServerCore::handlePrivkey(ClientSession* c, const QJsonObject& obj) {
 }
 
 // ------------------------------------------------- grupos via protocolo (v2)
+void ServerCore::scheduleSave() {
+    if (!m_saveDebounceTimer) {
+        m_saveDebounceTimer = new QTimer(this);
+        m_saveDebounceTimer->setSingleShot(true);
+        m_saveDebounceTimer->setInterval(400);
+        connect(m_saveDebounceTimer, &QTimer::timeout, this, &ServerCore::saveData);
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (!m_saveDebounceTimer->isActive())
+        m_saveDeferredSinceMs = now;
+    // Estende a janela de coalescência — no máximo 2 s desde a primeira
+    // pendência — para que uma rajada de edições vire uma única gravação,
+    // sem deixar uma alteração pendente por tempo indeterminado.
+    if (now - m_saveDeferredSinceMs < 2000)
+        m_saveDebounceTimer->start();
+}
+
+QJsonArray ServerCore::groupMembersJson(int gid) const {
+    QJsonArray members;
+    for (auto it = m_registry.cbegin(); it != m_registry.cend(); ++it) {
+        const QString uid = it.key();
+        QList<int> assigned = m_assignByUid.value(uid);
+        if (assigned.isEmpty()) {
+            assigned << 2;
+        } else if (!assigned.contains(1) && !assigned.contains(2)) {
+            assigned.prepend(2);
+        }
+        if (!assigned.contains(gid)) continue;
+        QJsonObject member;
+        member["uid"] = uid;
+        member["name"] = it.value().name;
+        member["online"] = false;
+        members << member;
+    }
+    // O registro persistente acima começa como offline. Uma sessão ativa
+    // com a mesma UID deve substituir esse estado, não ser descartada como
+    // uma duplicata.
+    for (ClientSession* online : m_clients) {
+        QList<int> assigned = m_assignByUid.value(online->uniqueId());
+        if (assigned.isEmpty()) {
+            assigned << 2;
+        } else if (!assigned.contains(1) && !assigned.contains(2)) {
+            assigned.prepend(2);
+        }
+        if (!assigned.contains(gid)) continue;
+
+        upsertOnlineGroupMember(members, online->id(),
+                                online->uniqueId(), online->name());
+    }
+    return members;
+}
+
+void ServerCore::broadcastGroupMembers(int gid) {
+    QJsonObject m = HProto::msg("group_member_update");
+    m["gid"] = gid;
+    m["members"] = groupMembersJson(gid);
+    broadcast(m);
+}
+
 void ServerCore::handleGroupList(ClientSession* c) {
     QJsonObject m = HProto::msg("group_list");
     QJsonArray arr;
     for (const GroupDef& g : m_groups) {
         QJsonObject group = groupToJson(g);
-        QJsonArray members;
-        for (auto it = m_registry.cbegin(); it != m_registry.cend(); ++it) {
-            const QString uid = it.key();
-            QList<int> assigned = m_assignByUid.value(uid);
-            if (assigned.isEmpty()) {
-                assigned << 2;
-            } else if (!assigned.contains(1) && !assigned.contains(2)) {
-                assigned.prepend(2);
-            }
-            bool hasGroup = assigned.contains(g.id);
-            if (!hasGroup) continue;
-            QJsonObject member;
-            member["uid"] = uid;
-            member["name"] = it.value().name;
-            member["online"] = false;
-            members << member;
-        }
-        // O registro persistente acima começa como offline. Uma sessão ativa
-        // com a mesma UID deve substituir esse estado, não ser descartada como
-        // uma duplicata.
-        for (ClientSession* online : m_clients) {
-            QList<int> assigned = m_assignByUid.value(online->uniqueId());
-            if (assigned.isEmpty()) {
-                assigned << 2;
-            } else if (!assigned.contains(1) && !assigned.contains(2)) {
-                assigned.prepend(2);
-            }
-            if (!assigned.contains(g.id)) continue;
-
-            upsertOnlineGroupMember(members, online->id(),
-                                    online->uniqueId(), online->name());
-        }
-        group["members"] = members;
+        group["members"] = groupMembersJson(g.id);
         arr << group;
     }
     m["groups"] = arr;
@@ -2311,7 +2343,9 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
         m_groups[g.id] = g;
     }
 
-    saveData();
+    // Gravação com coalescência: uma rajada de group_set (clientes antigos
+    // reordenam cargo por cargo) não trava o event loop com N regravações.
+    scheduleSave();
     // Recalcula todos os cargos dos clientes afetados, inclusive usuários com
     // múltiplos cargos, antes de anunciar a alteração.
     for (ClientSession* online : m_clients) {
@@ -2330,6 +2364,89 @@ void ServerCore::handleGroupSet(ClientSession* c, const QJsonObject& obj) {
 
     log(QStringLiteral("Grupo \"%1\" (#%2) %3 por %4")
             .arg(g.name).arg(g.id).arg(id > 0 ? "atualizado" : "criado", c->name()));
+}
+
+void ServerCore::handleGroupReorder(ClientSession* c, const QJsonObject& obj) {
+    if (!hasPerm(c, "groupEdit")) {
+        sendError(c, "no_permission", "Sem permissão para gerenciar grupos");
+        return;
+    }
+
+    // Reordenação em lote: o cliente envia TODAS as novas posições de uma
+    // vez (arrastar um cargo renumera a hierarquia inteira). Validamos tudo
+    // antes de tocar no estado — ou a lista inteira é aceita, ou nada muda.
+    const bool superAdmin = isSuperAdmin(c);
+    const int executorPosition = clientPosition(c);
+    const QJsonArray entries = obj["list"].toArray();
+    if (entries.isEmpty()) {
+        sendError(c, "bad_group", "Lista de reordenação vazia");
+        return;
+    }
+
+    struct ReorderEntry { int id; int order; int position; };
+    QList<ReorderEntry> updates;
+    QSet<int> seen;
+    for (const QJsonValue& v : entries) {
+        const QJsonObject e = v.toObject();
+        const int id = e["id"].toInt(0);
+        if (id <= 0 || !m_groups.contains(id)) {
+            sendError(c, "not_found", "Grupo não encontrado");
+            return;
+        }
+        if (!canManageGroup(c, id)) {
+            sendError(c, "hierarchy", "Você só pode editar cargos estritamente abaixo do seu");
+            return;
+        }
+        const GroupDef& current = m_groups[id];
+        const int requestedPosition = e.contains("position")
+            ? e["position"].toInt(current.position) : current.position;
+        if (!HierarchyPolicy::canSetGroupPosition(superAdmin, executorPosition,
+                                                  requestedPosition)) {
+            sendError(c, "hierarchy",
+                      "A posição do cargo deve permanecer estritamente abaixo da sua");
+            return;
+        }
+        if (seen.contains(id)) continue;
+        seen.insert(id);
+        updates << ReorderEntry{id,
+                                e.contains("order") ? e["order"].toInt(current.order) : current.order,
+                                requestedPosition};
+    }
+    if (updates.isEmpty()) {
+        sendError(c, "bad_group", "Lista de reordenação vazia");
+        return;
+    }
+
+    for (const ReorderEntry& u : updates) {
+        GroupDef g = m_groups[u.id];
+        g.order = u.order;
+        g.position = u.position;
+        m_groups[u.id] = g;
+    }
+
+    // UMA gravação e UM broadcast para a lista inteira — é isso que impede
+    // o servidor de travar (e a voz de cortar) durante a reordenação.
+    scheduleSave();
+
+    // Recalcula cada cliente afetado UMA única vez (membros de qualquer
+    // cargo tocado pela reordenação).
+    for (ClientSession* online : m_clients) {
+        bool affected = seen.contains(online->groupId());
+        if (!affected) {
+            const QList<int> gids = groupIdsForUid(online->uniqueId());
+            for (int gid : gids)
+                if (seen.contains(gid)) { affected = true; break; }
+        }
+        if (affected) applyGroup(online, 0, true);
+    }
+    broadcastGroups();
+
+    QJsonObject ok = HProto::msg("group_reorder_ok");
+    ok["count"] = updates.size();
+    c->send(ok);
+
+    log(QStringLiteral("Ordem de %1 cargo(s) atualizada por %2")
+            .arg(updates.size()).arg(c->name()));
 }
 
 void ServerCore::handleGroupDelete(ClientSession* c, const QJsonObject& obj) {
@@ -2359,7 +2476,7 @@ void ServerCore::handleGroupDelete(ClientSession* c, const QJsonObject& obj) {
             applyGroup(o, 0, true);
         }
     }
-    saveData();
+    scheduleSave();
     broadcastGroups();
 }
 
@@ -2417,10 +2534,13 @@ void ServerCore::handleClientSetGroup(ClientSession* c, const QJsonObject& obj) 
 
     if (onlineTarget) applyGroup(onlineTarget, 0, true);
 
-    saveData();
+    scheduleSave();
     log(QStringLiteral("%1 alterou cargos do UID %2: %3")
             .arg(c->name(), targetUid.left(16), QString::number(gid)));
     broadcastGroups();
+    // Lista de membros do cargo tocado, em tempo real: os painéis de grupos
+    // abertos passam a exibir o novo membro sem fechar e reabrir a aba.
+    broadcastGroupMembers(gid);
 }
 
 void ServerCore::handleServerEdit(ClientSession* c, const QJsonObject& obj) {
