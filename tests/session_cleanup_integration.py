@@ -167,15 +167,17 @@ def main() -> None:
     process = start_server(server, config, work, log)
     clients: list[Client] = []
     try:
-        # 1) Três clientes autenticados no canal padrão.
+        # 1) Três clientes autenticados no canal padrão. Só quem conectou
+        #    ANTES do joiner recebe user_joined: Survivor (primeiro) vê os
+        #    dois joins seguintes (Victim e Listener).
         survivor = Client("127.0.0.1", port, work, "Survivor")
         clients.append(survivor)
         victim = Client("127.0.0.1", port, work, "Victim")
         clients.append(victim)
         listener = Client("127.0.0.1", port, work, "Listener")
         clients.append(listener)
-        for user in (survivor, listener):
-            user.receive("user_joined")
+        survivor.receive("user_joined")   # Victim entrou
+        survivor.receive("user_joined")   # Listener entrou
 
         # 2) Survivor sussurra para Victim (o id de Victim entra no conjunto
         #    de alvos — o cleanup tem que removê-lo quando Victim cair).
