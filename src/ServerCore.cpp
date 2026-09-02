@@ -667,27 +667,10 @@ void ServerCore::onNewConnection() {
 void ServerCore::onClientDisconnected(ClientSession* client) {
     if (!client) return;
     if (client->id() > 0 && m_clients.contains(client->id())) {
+        const QString name = client->name();
         const int goneId = client->id();
-        QJsonObject left = HProto::msg("user_left");
-        left["id"] = goneId;
-        left["reason"] = "dropped";
-        broadcast(left, goneId);
-        removeFromChannels(goneId);
-        m_screenWatchers.remove(goneId);
-        for (auto it = m_screenWatchers.begin(); it != m_screenWatchers.end(); ++it)
-            it.value().remove(goneId);
-        m_clients.remove(goneId);
-        // Alvos de sussurro apontam para ids de SESSÃO. Quando o alvo cai, o
-        // id morre — quem continuava sussurrando para ele tinha a voz
-        // descartada em silêncio (o relay só encaminhava ao id inexistente).
-        // Remove o id morto dos conjuntos; se o conjunto ficar vazio, a voz
-        // volta ao canal (mesmo comportamento do cliente quando o alvo some).
-        for (ClientSession* other : m_clients) {
-            QSet<int> ids = other->whisperIds();
-            if (ids.remove(goneId) > 0) other->setWhisperIds(ids);
-        }
-        releaseVoiceToken(client);
-        log(QStringLiteral("Cliente #%1 (%2) desconectou").arg(goneId).arg(client->name()));
+        reapUser(client, "dropped");
+        log(QStringLiteral("Cliente #%1 (%2) desconectou").arg(goneId).arg(name));
     }
     client->deleteLater();
 }
@@ -699,6 +682,15 @@ void ServerCore::checkIdleClients() {
         const qint64 idleMs = c->lastActivityAt().msecsTo(now);
         if ((c->id() == 0 && idleMs > 15'000) || (c->id() > 0 && idleMs > 5 * 60'000)) {
             log(QStringLiteral("Fechando conexão ociosa de %1").arg(c->ip().toString()));
+            // BUGFIX (use-after-free): closeAndDelete() desvincula o sinal
+            // disconnected do socket, então onClientDisconnected() NUNCA roda
+            // neste caminho. Antes, a sessão era destruída pelo deleteLater()
+            // mas continuava listada em m_channels/m_clients — o próximo
+            // relayVoice()/broadcast() dereferenciava o ponteiro morto e
+            // derrubava o servidor. O ciclo completo (reapUser) limpa todo
+            // o estado ANTES de fechar; sessões pré-login (id 0) não estão
+            // em m_clients e o reapUser não faz nada por elas.
+            reapUser(c, "dropped");
             c->closeAndDelete();
             continue;
         }
@@ -870,17 +862,10 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     }
     else if (t == "quit") {
         // desconexão graciosa: notifica os demais antes de fechar
-        QJsonObject left = HProto::msg("user_left");
-        left["id"] = c->id();
-        left["reason"] = "quit";
-        broadcast(left, c->id());
-        removeFromChannels(c->id());
-        m_screenWatchers.remove(c->id());
-        for (auto it = m_screenWatchers.begin(); it != m_screenWatchers.end(); ++it)
-            it.value().remove(c->id());
-        m_clients.remove(c->id());
-        releaseVoiceToken(c);
-        log(QStringLiteral("Cliente #%1 (%2) saiu").arg(c->id()).arg(c->name()));
+        const QString name = c->name();
+        const int goneId = c->id();
+        reapUser(c, "quit");
+        log(QStringLiteral("Cliente #%1 (%2) saiu").arg(goneId).arg(name));
         c->closeAndDelete();
     }
 }
@@ -2618,12 +2603,13 @@ void ServerCore::doKick(ClientSession* c, const QString& reason, bool fromServer
         m["reason"] = reason;
         broadcast(m);
     } else {
-        QJsonObject left = HProto::msg("user_left");
-        left["id"] = c->id();
-        left["reason"] = ban ? "banned" : "kicked";
-        broadcast(left, c->id());
-        m_clients.remove(c->id());
-        releaseVoiceToken(c);
+        // BUGFIX: antes faltava limpar m_screenWatchers e o id das listas de
+        // sussurro dos demais — onClientDisconnected() nunca roda aqui
+        // (closeAndDelete desvincula o sinal), então o id morto ficava nos
+        // conjuntos. reapUser cobre user_left, canais, watchers, sussurros,
+        // m_clients e token; removeFromChannels acima já saiu dos canais,
+        // e a segunda chamada dentro dele é um no-op inofensivo.
+        reapUser(c, ban ? "banned" : "kicked");
         c->closeAndDelete();
     }
 }
@@ -2955,6 +2941,31 @@ void ServerCore::relayScreenShare(ClientSession* sender, quint16 seq, const QByt
         if (!hasChannelPerm(target, targetChannel, QStringLiteral("listen"))) continue;
         m_voice->sendTo(target->udpAddress(), target->udpPort(), p);
     }
+}
+
+void ServerCore::reapUser(ClientSession* c, const QString& reason) {
+    if (!c || c->id() <= 0 || !m_clients.contains(c->id())) return;
+
+    const int goneId = c->id();
+    QJsonObject left = HProto::msg("user_left");
+    left["id"] = goneId;
+    left["reason"] = reason;
+    broadcast(left, goneId);
+    removeFromChannels(goneId);
+    m_screenWatchers.remove(goneId);
+    for (auto it = m_screenWatchers.begin(); it != m_screenWatchers.end(); ++it)
+        it.value().remove(goneId);
+    m_clients.remove(goneId);
+    // Alvos de sussurro apontam para ids de SESSÃO. Quando o alvo cai, o
+    // id morre — quem continuava sussurrando para ele tinha a voz
+    // descartada em silêncio (o relay só encaminhava ao id inexistente).
+    // Remove o id morto dos conjuntos; se o conjunto ficar vazio, a voz
+    // volta ao canal (mesmo comportamento do cliente quando o alvo some).
+    for (ClientSession* other : m_clients) {
+        QSet<int> ids = other->whisperIds();
+        if (ids.remove(goneId) > 0) other->setWhisperIds(ids);
+    }
+    releaseVoiceToken(c);
 }
 
 void ServerCore::rotateChannelKey(int channelId) {

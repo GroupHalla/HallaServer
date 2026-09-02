@@ -118,6 +118,13 @@ if (UNIX)
                 --server $<TARGET_FILE:halla-server>
     )
     set_tests_properties(multi-role-icons-integration PROPERTIES TIMEOUT 90)
+    add_test(
+        NAME session-cleanup-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_cleanup_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(session-cleanup-integration PROPERTIES TIMEOUT 90)
 endif()
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)

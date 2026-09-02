@@ -14,6 +14,9 @@ ClientSession::ClientSession(QTcpSocket* socket, ServerCore* core, QObject* pare
 
 void ClientSession::onReadyRead() {
     static constexpr int kMaxTcpMessageBytes = 2 * 1024 * 1024;
+    // Sessão já marcada para fechar por violação de protocolo: descarta tudo
+    // que chegar até o socket fechar de fato (sem re-processar mensagens).
+    if (m_protocolClosePending) { m_socket->readAll(); return; }
     m_lastActivity = QDateTime::currentDateTimeUtc();
     m_buffer += m_socket->readAll();
     if (m_buffer.size() > kMaxTcpMessageBytes) {
@@ -22,7 +25,17 @@ void ClientSession::onReadyRead() {
         e["code"] = "message_too_big";
         e["msg"] = "Mensagem TCP excede 2 MiB";
         send(e);
-        closeAndDelete();
+        // BUGFIX (use-after-free): antes chamava closeAndDelete(), que
+        // desvincula o sinal disconnected do socket — o cleanup do
+        // ServerCore (onClientDisconnected) nunca rodava e a sessão
+        // autenticada morria com o ponteiro pendurado em m_clients (crash
+        // no próximo relayVoice/broadcast; qualquer cliente logado podia
+        // derrubar o servidor enviando > 2 MiB). Fecha agora pelo caminho
+        // natural: disconnectFromHost() dispara disconnected →
+        // ServerCore::reapUser limpa TODO o estado antes de destruir.
+        m_protocolClosePending = true;
+        m_buffer.clear();
+        m_socket->disconnectFromHost();
         return;
     }
     int idx;
@@ -35,7 +48,10 @@ void ClientSession::onReadyRead() {
             e["code"] = "message_too_big";
             e["msg"] = "Mensagem TCP excede 2 MiB";
             send(e);
-            closeAndDelete();
+            // Mesmo BUGFIX do limite de buffer acima (ver comentário).
+            m_protocolClosePending = true;
+            m_buffer.clear();
+            m_socket->disconnectFromHost();
             return;
         }
         if (line.isEmpty()) continue;

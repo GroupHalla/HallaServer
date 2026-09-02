@@ -128,6 +128,11 @@ private:
     QTcpSocket* m_socket;
     ServerCore* m_core;
     QByteArray m_buffer;
+    // Protocolo quebrado (mensagem > 2 MiB): a sessão foi pedida para fechar
+    // pelo caminho NATURAL (disconnectFromHost → disconnected → cleanup no
+    // ServerCore). Drena bytes até o socket fechar de verdade e evita
+    // re-processar/re-enviar o erro a cada readyRead durante o fechamento.
+    bool m_protocolClosePending = false;
 
     int m_id = 0;
     QString m_name;

@@ -383,6 +383,14 @@ private:
     void ensureVoiceToken(ClientSession* c);
     void releaseVoiceToken(ClientSession* c);
     void doKick(ClientSession* c, const QString& reason, bool fromServer, bool ban, int minutes = 0);
+    // Ciclo COMPLETO de desconexão de uma sessão autenticada: broadcast
+    // user_left, remoção de canais, watchers de tela, alvos de sussurro,
+    // m_clients e token de voz. closeAndDelete() desvincula o sinal
+    // disconnected do socket, de modo que onClientDisconnected() NÃO roda
+    // nos caminhos que o chamam (idle/kick/quit) — todo estado tem que ser
+    // limpo explicitamente AQUI antes. Idempotente: sessões não
+    // autenticadas (id 0) ou já removidas de m_clients não fazem nada.
+    void reapUser(ClientSession* c, const QString& reason);
     void registerClient(ClientSession* c);
     int channelOfUser(int userId) const;
     void removeFromChannels(int userId);
