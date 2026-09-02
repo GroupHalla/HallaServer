@@ -45,7 +45,9 @@ jobs:
       - name: Install Python cryptography (E2EE tests)
         shell: msys2 {0}
         run: |
-          pacman -S --noconfirm python python-pip
+          # O PATH do MINGW64 resolve `python` para /mingw64/bin/python — o
+          # pip tem que ser do pacote MINGW (o `python` do pacman é o do MSYS).
+          pacman -S --noconfirm mingw-w64-x86_64-python-pip
           python -m pip install --quiet cryptography
 
       - name: Build and test Server
