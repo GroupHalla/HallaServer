@@ -199,7 +199,10 @@ def main() -> None:
         clients.append(bob)
         alice.receive("user_joined")
 
+        # O welcome do alice não contém o bob (conectou depois) — o mapa
+        # precisa das duas visões: a do alice + o user_joined que ele viu.
         users = {u["id"]: u for u in alice.welcome.get("users", [])}
+        users.update({u["id"]: u for u in bob.welcome.get("users", [])})
         for client in (alice, bob):
             entry = users[client.id]
             id_pub, dh_pub, _ = verify_directory_entry(entry)

@@ -8,6 +8,8 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+
+import e2ee_v6
 import shutil
 import signal
 import socket
@@ -116,6 +118,33 @@ def encoded(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
+def raw_hello_expect_bad_proto(port: int, work: Path, name: str,
+                                protocol: int) -> dict:
+    """Conecta, envia hello com protocolo antigo e devolve o error do servidor
+    (v6: transição dura — bad_proto antes de qualquer handshake de identidade)."""
+    identity = work / name
+    identity.mkdir(parents=True, exist_ok=True)
+    v6 = e2ee_v6.V6Identity(identity)
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    raw = socket.create_connection(("127.0.0.1", port), timeout=5)
+    sock = context.wrap_socket(raw, server_hostname="HallaServer")
+    sock.settimeout(5)
+    stream = sock.makefile("rwb", buffering=0)
+    stream.write(json.dumps({
+        "t": "hello", "proto": protocol, "uid": v6.uid,
+        "idPub": base64.b64encode(v6.id_pub).decode(), "nick": name,
+        "ver": "plugin-data-integration", "platform": "Linux",
+        "dhPub": base64.b64encode(v6.dh_pub).decode(),
+        "dhSig": base64.b64encode(v6.dh_sig).decode(),
+    }, separators=(",", ":")).encode() + b"\n")
+    response = json.loads(stream.readline())
+    stream.close()
+    sock.close()
+    return response
+
+
 def plugin_message(target: int, topic: str, data: bytes,
                    ids: list[int] | None = None) -> dict:
     message = {
@@ -158,10 +187,13 @@ def main() -> None:
         receiver = Client("127.0.0.1", port, work, "PositionReceiver")
         clients.append(receiver)
         sender.receive("user_joined")
-        legacy = Client("127.0.0.1", port, work, "LegacyClient", protocol=4)
-        clients.append(legacy)
-        sender.receive("user_joined")
-        receiver.receive("user_joined")
+        # v6: transição dura — clientes de protocolo < 6 são recusados com
+        # bad_proto (a promessa de E2EE não admite sessão sem o par de
+        # chaves). O caminho "plugin_data_unsupported" (proto < 5) ficou
+        # inalcançável: ninguém abaixo de v6 passa do hello.
+        legacy = raw_hello_expect_bad_proto(port, work, "LegacyClient", 4)
+        assert legacy["code"] == "bad_proto", legacy
+
         outsider = Client("127.0.0.1", port, work, "OtherChannel")
         clients.append(outsider)
         sender.receive("user_joined")
@@ -268,10 +300,6 @@ def main() -> None:
         sender.send(invalid)
         bad_id = sender.receive("error")
         assert bad_id["code"] == "bad_plugin_data", bad_id
-
-        legacy.send(plugin_message(0, "legacy", b"unsupported"))
-        unsupported = legacy.receive("error")
-        assert unsupported["code"] == "plugin_data_unsupported", unsupported
 
         for client in reversed(clients):
             client.close()
