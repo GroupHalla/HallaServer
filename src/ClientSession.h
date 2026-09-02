@@ -108,6 +108,16 @@ public:
     bool identityVerified() const { return m_identityVerified; }
     void setAdminAuthenticated(bool on) { m_adminAuthenticated = on; }
     bool adminAuthenticated() const { return m_adminAuthenticated; }
+    // v6 E2EE: chave pública X25519 (32 bytes crus) + assinatura Ed25519 que a
+    // liga à identidade. A sessão guarda o par já VERIFICADO no login (o
+    // servidor confere dhSig contra idPub) e o publica no user object para
+    // todos — os clientes re-verificam localmente, sem confiar no servidor.
+    void setDhPublicKey(const QByteArray& pub) { m_dhPublicKey = pub; }
+    QByteArray dhPublicKey() const { return m_dhPublicKey; }
+    void setDhSignature(const QByteArray& sig) { m_dhSignature = sig; }
+    QByteArray dhSignature() const { return m_dhSignature; }
+    void setIdentityPublicKey(const QByteArray& pub) { m_identityPublicKey = pub; }
+    QByteArray identityPublicKey() const { return m_identityPublicKey; }
     void setPendingIdentity(const QJsonObject& hello, const QByteArray& pub, const QByteArray& nonce) {
         m_pendingIdentityHello = hello; m_pendingIdentityPub = pub; m_pendingIdentityNonce = nonce;
     }
@@ -174,4 +184,8 @@ private:
     QJsonObject m_pendingIdentityHello;
     QByteArray m_pendingIdentityPub;
     QByteArray m_pendingIdentityNonce;
+    // v6 E2EE: par público da sessão (idPub SPKI DER + dhPub X25519 + dhSig)
+    QByteArray m_identityPublicKey;
+    QByteArray m_dhPublicKey;
+    QByteArray m_dhSignature;
 };

@@ -112,6 +112,17 @@ QJsonObject ClientSession::toJson(bool) const {
     u["screensharing"] = m_screensharing;
     u["whispering"] = (m_talking && !m_whisperIds.isEmpty());
     if (!m_avatarHash.isEmpty()) u["av"] = m_avatarHash;
+    // v6 E2EE: publica o trio de chaves públicas da identidade. Qualquer
+    // cliente reconstrói a cadeia de confiança localmente:
+    //   uid == base64(SHA-256(idPub))  (ligação uid ↔ identidade)
+    //   dhSig == Ed25519(idPub, "HALLA-DH-V1" || dhPub)  (ligação identidade ↔ X25519)
+    // O servidor NÃO decifra nada com isso — é só um diretório público.
+    if (!m_identityPublicKey.isEmpty())
+        u["idPub"] = QString::fromLatin1(m_identityPublicKey.toBase64());
+    if (!m_dhPublicKey.isEmpty())
+        u["dhPub"] = QString::fromLatin1(m_dhPublicKey.toBase64());
+    if (!m_dhSignature.isEmpty())
+        u["dhSig"] = QString::fromLatin1(m_dhSignature.toBase64());
     return u;
 }
 

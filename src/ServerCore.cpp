@@ -126,6 +126,16 @@ static void messageRateLimitFor(const QString& type, int& maxEvents, int& window
     windowMs = 10'000;
     maxEvents = 60;
     if (type == QLatin1String("chat")) { maxEvents = 20; return; }
+    // Envelopes E2EE: rotações de canal entregam uma mensagem por membro
+    // (uma rotação num servidor de 32 usuários = 32 mensagens do mestre). O
+    // payload é minúsculo (~300 B) e opaco ao servidor.
+    if (type == QLatin1String("e2e_key")) { maxEvents = 240; return; }
+    // Pedido de re-entrega de chave (auto-cura quando o mestre não respondeu
+    // ao user_joined): basta 1 por janela; repetir só alaga o canal.
+    if (type == QLatin1String("e2e_key_request")) { maxEvents = 1; windowMs = 2'000; return; }
+    // Consulta de chaves públicas de identidade: barato, mas sem motivo para
+    // ultrapassar o ritmo de digitação de mensagens offline.
+    if (type == QLatin1String("identity_get")) { maxEvents = 30; return; }
     if (type == QLatin1String("move") || type == QLatin1String("move_other")) { maxEvents = 15; return; }
     // talking é controle de VAD/PTT, não chat. Em microfones ruidosos o Mobile
     // pode alternar fala/silêncio muitas vezes; não avise o usuário como spam.
@@ -731,6 +741,13 @@ void ServerCore::registerClient(ClientSession* c) {
     if (!rc.firstSeen.isValid()) rc.firstSeen = QDateTime::currentDateTime();
     rc.name = c->name();
     rc.lastSeen = QDateTime::currentDateTime();
+    // v6 E2EE: publica as chaves da identidade no registro (para identity_get
+    // de usuários offline). A sessão é a fonte da verdade no login.
+    if (!c->identityPublicKey().isEmpty()) {
+        rc.idPub = c->identityPublicKey();
+        rc.dhPub = c->dhPublicKey();
+        rc.dhSig = c->dhSignature();
+    }
     saveData();
 }
 
@@ -783,6 +800,8 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     if (t == "hello")           handleHello(c, obj);
     else if (t == "ping")        { QJsonObject p = HProto::msg("pong"); p["ts"] = obj["ts"]; c->send(p); }
     else if (t == "chat")        handleChat(c, obj);
+    else if (t == "e2e_key")           handleE2eKey(c, obj);
+    else if (t == "e2e_key_request")   handleE2eKeyRequest(c, obj);
     else if (t == "move")        handleMove(c, obj);
     else if (t == "move_other")  handleMoveOther(c, obj);
     else if (t == "commander")    handleCommander(c, obj);
@@ -826,6 +845,7 @@ void ServerCore::onClientMessage(ClientSession* c, const QJsonObject& obj) {
     else if (t == "icon_get")       handleIconGet(c, obj);
     else if (t == "icon_set")       handleIconSet(c, obj);
     else if (t == "offline_send")   handleOfflineSend(c, obj);
+    else if (t == "identity_get")   handleIdentityGet(c, obj);
     else if (t == "complaint_add")  handleComplaintAdd(c, obj);
     else if (t == "complaint_list") handleComplaintList(c);
     else if (t == "complaint_clear") handleComplaintClear(c, obj);
@@ -955,6 +975,17 @@ void ServerCore::handleWebRtcSignal(ClientSession* c, const QJsonObject& obj) {
     target->send(out);
 }
 
+// Prefixo do domínio assinado no binding E2EE (idPub liga a X25519).
+static const char kDhBindingDomain[] = "HALLA-DH-V1";
+
+static QByteArray dhBindingMessage(const QByteArray& dhPub) {
+    QByteArray m;
+    m.reserve(int(sizeof(kDhBindingDomain)) + dhPub.size());
+    m.append(kDhBindingDomain, int(sizeof(kDhBindingDomain)) - 1); // sem NUL
+    m.append(dhPub);
+    return m;
+}
+
 void ServerCore::handleIdentityProof(ClientSession* c, const QJsonObject& obj) {
     if (!c || c->id() != 0) return;
     const QByteArray sig = QByteArray::fromBase64(obj["sig"].toString().toLatin1());
@@ -966,6 +997,26 @@ void ServerCore::handleIdentityProof(ClientSession* c, const QJsonObject& obj) {
         return;
     }
     QJsonObject hello = c->pendingIdentityHello();
+
+    // v6 E2EE: o hello traz a X25519 pública (32 bytes crus) e a assinatura
+    // Ed25519 que a liga à identidade. O servidor confere o binding UMA vez
+    // no login e publica o trio no user object; os clientes re-verificam
+    // localmente (não confiam no servidor como raiz — a verificação por SAS
+    // detecta substituição de chaves). Sem dhPub/dhSig válido não há E2EE:
+    // recusar aqui é recusar a promessa falsa.
+    const QByteArray dhPub = QByteArray::fromBase64(hello["dhPub"].toString().toLatin1());
+    const QByteArray dhSig = QByteArray::fromBase64(hello["dhSig"].toString().toLatin1());
+    if (dhPub.size() != 32 || dhSig.size() != 64
+            || !verifyIdentitySignature(pub, dhBindingMessage(dhPub), dhSig)) {
+        sendError(c, "bad_identity",
+                  "Chave de criptografia ponta a ponta ausente ou inválida — atualize o cliente");
+        c->closeAndDelete();
+        return;
+    }
+    c->setIdentityPublicKey(pub);
+    c->setDhPublicKey(dhPub);
+    c->setDhSignature(dhSig);
+
     hello["uid"] = uidForIdentityPublicKey(pub);
     c->setIdentityVerified(true);
     c->clearPendingIdentity();
@@ -1142,6 +1193,7 @@ void ServerCore::handleHello(ClientSession* c, const QJsonObject& obj) {
             m["fromName"] = om.fromName;
             m["text"] = om.text;
             m["ts"] = om.ts.toString(Qt::ISODate);
+            m["e2ee"] = om.e2ee; // v6: destinatário sabe que decifra com fromUid
             c->send(m);
         }
         m_offline.remove(uid);
@@ -1263,20 +1315,12 @@ void ServerCore::sendWelcome(ClientSession* c) {
     w["voice"] = voice;
     w["iceServers"] = m_webRtcIceServers;
 
-    // Chaves atuais dos canais aos quais o cliente precisa ter acesso chegam
-    // dentro do welcome. Isso evita a corrida em que channel_key era enviado
-    // antes de o cliente marcar a sessão como pronta e acabava ignorado.
-    QJsonObject keys;
-    const int myChannel = channelOfUser(c->id());
-    if (myChannel > 0 && m_channels.contains(myChannel)) {
-        const QSet<int> component = voiceComponentOf(myChannel);
-        for (int id : component) {
-            if (!m_channelKeys.contains(id)) rotateChannelKey(id);
-            if (m_channelKeys.contains(id))
-                keys[QString::number(id)] = QString::fromLatin1(m_channelKeys[id].toBase64());
-        }
-    }
-    if (!keys.isEmpty()) w["channelKeys"] = keys;
+    // v6 E2EE: NENHUMA chave de canal aqui. As chaves são geradas nos
+    // clientes e chegam embrulhadas (e2e_key) via relay opaco — o servidor
+    // não decifra conteúdo de voz/chat/sussurro. O welcome entrega o
+    // diretório de chaves públicas (idPub/dhPub/dhSig em cada user object);
+    // o mestre do componente embrulha a chave vigente para quem acabou de
+    // entrar assim que vê o user_joined.
 
     c->send(w);
 }
@@ -1288,7 +1332,17 @@ void ServerCore::handleChat(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "bad_scope", "Escopo de chat inválido");
         return;
     }
-    if (!validHumanText(text, 1024, true)) return;
+    // v6 E2EE: com "e2ee": true, "text" carrega base64 de ciphertext
+    // (nonce 12 + ct + tag 16) — opaco ao servidor. Limite folgado para o
+    // plaintext de 1024 caracteres virar base64 (≈1.4k) sobrando espaço.
+    if (obj["e2ee"].toBool(false)) {
+        if (text.isEmpty() || text.size() > 1600) {
+            sendError(c, "bad_text", "Mensagem inválida");
+            return;
+        }
+    } else if (!validHumanText(text, 1024, true)) {
+        return;
+    }
     if (scope == "private" && !hasPerm(c, "privmsg")) {
         sendError(c, "no_permission", "Sem permissão para mensagens privadas");
         return;
@@ -1299,6 +1353,7 @@ void ServerCore::handleChat(ClientSession* c, const QJsonObject& obj) {
     m["from"] = c->id();
     m["fromName"] = c->name();
     m["text"] = text;
+    if (obj["e2ee"].toBool(false)) m["e2ee"] = true; // repassa o marcador opaco
 
     if (scope == "server")         broadcast(m);
     else if (scope == "channel") {
@@ -1315,6 +1370,79 @@ void ServerCore::handleChat(ClientSession* c, const QJsonObject& obj) {
             m["to"] = to;
             m_clients[to]->send(m);
             c->send(m); // eco para o remetente
+        }
+    }
+}
+
+// v6 E2EE — relay de envelope de chave. O cliente remetente (normalmente o
+// mestre de chaves do componente = menor UID) embrulhou a chave de canal
+// para UM destinatário: X25519 efêmero + HKDF + AES-256-GCM. O servidor vê
+// apenas bytes opacos — não sabe qual canal, qual época, nem a chave.
+//
+// Roteamento por id de SESSÃO (não UID): o remetente lê o id atual do
+// destinatário na lista de usuários; reconexão troca o id e o pedido de
+// re-entrega (e2e_key_request) cobre a lacuna. "from" é acrescentado pelo
+// servidor — o destinatário usa para localizar o dhPub do remetente no
+// diretório local e tentar o unwrap; se o servidor mentir o "from", o
+// AEAD simplesmente não abre (chave de wrap errada). Sem risco.
+void ServerCore::handleE2eKey(ClientSession* c, const QJsonObject& obj) {
+    const int to = obj["to"].toInt();
+    const QString enc = obj["enc"].toString();
+    if (to <= 0 || to == c->id() || !m_clients.contains(to)) {
+        sendError(c, "not_found", "Destinatário do envelope E2EE inválido");
+        return;
+    }
+    // Base64 do envelope (ephPub 32 + nonce 12 + ct + tag 16): raramente passa
+    // de ~400 caracteres; 4 KiB cobre qualquer uso legítimo com folga.
+    if (enc.isEmpty() || enc.size() > 4096) {
+        sendError(c, "bad_e2e_key", "Envelope E2EE inválido");
+        return;
+    }
+    QJsonObject m = HProto::msg("e2e_key");
+    m["to"] = to;
+    m["enc"] = enc;
+    m["from"] = c->id();
+    m_clients[to]->send(m);
+}
+
+// v6 E2EE — pedido de re-entrega de chave. O cliente acabou de entrar num
+// canal (ou o mestre não respondeu ao user_joined) e ainda não tem a chave
+// vigente. Qualquer membro do componente que JÁ tenha a chave pode
+// embrulha-la para o solicitante (o mestre é só o responsável default, não
+// um ponto único de falha). Repetido por membro: envelopes idempotentes —
+// mesma época/chave só gastam rate limit; épocas diferentes são curadas
+// pelo multi-try do receptor.
+void ServerCore::handleE2eKeyRequest(ClientSession* c, const QJsonObject& obj) {
+    const int channelId = obj["channel"].toInt();
+    // Canal 0 = chave do escopo "servidor" (chat público) — o pedido vai a
+    // todos os conectados; a chave de escopo tem o mesmo ciclo de vida das
+    // chaves de canal (mestre = menor UID online).
+    if (channelId < 0 || (channelId != 0 && !m_channels.contains(channelId))) {
+        sendError(c, "invalid_channel", "Canal do pedido E2EE inválido");
+        return;
+    }
+    // Só MEMBRO do componente pede chave de componente: sem isto, alguém de
+    // fora ganharia a chave (não ganharia o áudio do relay, mas não há motivo
+    // para entregá-la). O escopo "servidor" (canal 0) é de todos.
+    if (channelId != 0 && !voiceComponentOf(channelId).contains(channelOfUser(c->id()))) {
+        sendError(c, "no_permission", "Entre no canal para receber a chave E2EE dele");
+        return;
+    }
+    QJsonObject m = HProto::msg("e2e_key_request");
+    m["channel"] = channelId;
+    m["from"] = c->id();
+    m["fromUid"] = c->uniqueId();
+    if (channelId == 0) {
+        for (ClientSession* member : m_clients)
+            if (member->id() != c->id()) member->send(m);
+        return;
+    }
+    const QSet<int> component = voiceComponentOf(channelId);
+    for (int id : component) {
+        if (!m_channels.contains(id)) continue;
+        for (int uid : m_channels[id].users) {
+            ClientSession* member = m_clients.value(uid, nullptr);
+            if (member && member->id() != c->id()) member->send(m);
         }
     }
 }
@@ -1590,11 +1718,15 @@ void ServerCore::handlePoke(ClientSession* c, const QJsonObject& obj) {
     const int to = obj["to"].toInt();
     if (!m_clients.contains(to)) return;
     const QString pokeMsg = obj["msg"].toString();
-    if (!validOptionalText(pokeMsg, 100, false)) { sendError(c, "bad_text", "Mensagem inválida"); return; }
+    // v6 E2EE: poke cifrado = base64 opaco (limite folgado p/ 100 chars).
+    if (obj["e2ee"].toBool(false)) {
+        if (pokeMsg.isEmpty() || pokeMsg.size() > 256) { sendError(c, "bad_text", "Mensagem inválida"); return; }
+    } else if (!validOptionalText(pokeMsg, 100, false)) { sendError(c, "bad_text", "Mensagem inválida"); return; }
     QJsonObject m = HProto::msg("poke");
     m["from"] = c->id();
     m["fromName"] = c->name();
     m["msg"] = pokeMsg;
+    if (obj["e2ee"].toBool(false)) m["e2ee"] = true;
     m_clients[to]->send(m);
     // Eco de confirmação para quem cutucou: marcado com "self" para que os
     // clientes saibam que é o espelho da própria ação e não um poke recebido
@@ -1827,9 +1959,9 @@ void ServerCore::handleChanLink(ClientSession* c, const QJsonObject& obj) {
     }
     bumpChannelTopology(); // vínculos mudaram: componente de voz recalculado
 
-    // Alterar vínculos muda o conjunto de ouvintes; rotaciona a chave dos
-    // componentes afetados para manter forward secrecy básica.
-    for (int id : ids) rotateChannelKey(id);
+    // v6 E2EE: vínculos mudam o conjunto de ouvintes — quem rotaciona a
+    // chave do componente agora é o CLIENTE mestre (menor UID), ao receber o
+    // chan_update abaixo. O servidor não conhece mais nenhuma chave.
 
     saveData();
     for (int id : ids) {
@@ -2648,7 +2780,9 @@ void ServerCore::removeFromChannels(int userId) {
     for (SvrChan& c : m_channels) {
         if (c.users.contains(userId)) {
             c.users.removeAll(userId);
-            rotateChannelKey(c.id);
+            // v6 E2EE: a rotação da chave do componente (quem saiu não pode
+            // continuar ouvindo) é feita pelo cliente mestre quando vê o
+            // user_left/user_moved — o servidor não conhece a chave.
         }
     }
 }
@@ -2658,7 +2792,9 @@ void ServerCore::addToChannel(int userId, int channelId) {
     if (m_channels.contains(channelId)) {
         m_channels[channelId].users << userId;
         m_userChannelCache[userId] = channelId;
-        rotateChannelKey(channelId);
+        // v6 E2EE: quem embrulha a chave vigente para quem ENTROU é o cliente
+        // mestre do componente (menor UID), ao ver o user_joined/user_moved.
+        // Sem geração nem distribuição de chaves no servidor.
     }
 }
 
@@ -2966,71 +3102,4 @@ void ServerCore::reapUser(ClientSession* c, const QString& reason) {
         if (ids.remove(goneId) > 0) other->setWhisperIds(ids);
     }
     releaseVoiceToken(c);
-}
-
-void ServerCore::rotateChannelKey(int channelId) {
-    if (!m_channels.contains(channelId)) return;
-
-    // A cifra protege a mídia em trânsito entre clientes e relay. O servidor
-    // gera/distribui a chave e, portanto, não é excluído do modelo de confiança.
-    // Para canais vinculados, todos os canais do componente de
-    // áudio precisam compartilhar a mesma chave; caso contrário, usuários em
-    // canais linkados receberiam frames cifrados com uma chave que não possuem.
-    const QSet<int> component = voiceComponentOf(channelId);
-
-    QByteArray key(32, '\0');
-    if (RAND_bytes(reinterpret_cast<unsigned char*>(key.data()), key.size()) != 1) {
-        log(QStringLiteral("FALHA: não foi possível gerar chave criptográfica de canal"));
-        return;
-    }
-
-    for (int id : component)
-        m_channelKeys[id] = key;
-
-    QSet<int> componentUsers;
-    for (int id : component) {
-        if (!m_channels.contains(id)) continue;
-        for (int uid : m_channels[id].users) componentUsers.insert(uid);
-    }
-
-    // Todos no componente recebem a chave de todos os canais do componente.
-    // Assim, quando A escuta B por link de canais, o cliente consegue escolher
-    // a chave pelo canal real do remetente sem o servidor decodificar nada.
-    for (int id : component) {
-        if (!m_channels.contains(id)) continue;
-        QJsonObject m = HProto::msg("channel_key");
-        m["channel"] = id;
-        m["key"] = QString::fromLatin1(key.toBase64());
-        for (int uid : componentUsers) {
-            ClientSession* target = m_clients.value(uid, nullptr);
-            if (target) target->send(m);
-        }
-    }
-
-    // Alvos de sussurro FORA do componente também precisam da chave nova: a
-    // voz de quem sussurra continua cifrada com a chave do canal em que o
-    // remetente ESTÁ. Sem esta entrega, qualquer join/leave no canal do
-    // remetente girava a chave e o alvo ficava com a chave antiga — o sussurro
-    // "morria" com o áudio chegando, mas indecifrável (descartado em silêncio).
-    // Mesmo modelo de segurança do handleWhisper: a chave só decifra tráfego
-    // que o relay já encaminharia ao alvo.
-    QSet<int> whisperTargets;
-    for (int uid : componentUsers) {
-        ClientSession* s = m_clients.value(uid, nullptr);
-        if (!s) continue;
-        for (int tid : s->whisperIds())
-            if (!componentUsers.contains(tid)) whisperTargets.insert(tid);
-    }
-    if (!whisperTargets.isEmpty()) {
-        for (int id : component) {
-            if (!m_channels.contains(id)) continue;
-            QJsonObject m = HProto::msg("channel_key");
-            m["channel"] = id;
-            m["key"] = QString::fromLatin1(key.toBase64());
-            for (int tid : whisperTargets) {
-                ClientSession* target = m_clients.value(tid, nullptr);
-                if (target) target->send(m);
-            }
-        }
-    }
 }

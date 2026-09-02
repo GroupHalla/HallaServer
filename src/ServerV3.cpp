@@ -98,10 +98,43 @@ void ServerCore::handleIconSet(ClientSession* c, const QJsonObject& obj) {
     }
 }
 
+// ============================================== DIRETÓRIO DE IDENTIDADES (v6)
+void ServerCore::handleIdentityGet(ClientSession* c, const QJsonObject& obj) {
+    const QString uid = obj["uid"].toString();
+    if (uid.isEmpty() || !m_registry.contains(uid)) {
+        sendError(c, "not_found", "Identidade desconhecida neste servidor");
+        return;
+    }
+    const RegClient& rc = m_registry[uid];
+    // Só chaves PÚBLICAS saem daqui — mesmo material que os user objects
+    // publicam online. A utilidade é o caso OFFLINE: enviar mensagem cifrada
+    // para alguém que não está conectado exige o dhPub dele.
+    if (rc.idPub.isEmpty() || rc.dhPub.isEmpty() || rc.dhSig.isEmpty()) {
+        sendError(c, "not_found", "Esta identidade ainda não tem chaves E2EE registradas "
+                                 "(o usuário precisa conectar-se uma vez com um cliente v6)");
+        return;
+    }
+    QJsonObject m = HProto::msg("identity_data");
+    m["uid"] = uid;
+    m["idPub"] = QString::fromLatin1(rc.idPub.toBase64());
+    m["dhPub"] = QString::fromLatin1(rc.dhPub.toBase64());
+    m["dhSig"] = QString::fromLatin1(rc.dhSig.toBase64());
+    c->send(m);
+}
+
 // ===================================================== MENSAGENS OFFLINE (v3)
 void ServerCore::handleOfflineSend(ClientSession* c, const QJsonObject& obj) {
     const QString toUid = obj["uid"].toString();
-    const QString text = obj["text"].toString().left(500);
+    QString text = obj["text"].toString();
+    // v6 E2EE: mensagem offline CIFRADA por par (X25519 estático-estático) —
+    // o servidor guarda e entrega ciphertext; o destinatário decifra no
+    // login usando o fromUid (par de chaves persistente, não depende de
+    // quem está online). Limite cobre 500 chars de plaintext em base64.
+    if (obj["e2ee"].toBool(false)) {
+        if (text.size() > 800) return;
+    } else {
+        text = text.left(500);
+    }
     if (toUid.isEmpty() || text.trimmed().isEmpty()) return;
     if (!m_registry.contains(toUid)) {
         sendError(c, "not_found", "Identidade desconhecida neste servidor");
@@ -112,7 +145,8 @@ void ServerCore::handleOfflineSend(ClientSession* c, const QJsonObject& obj) {
         sendError(c, "inbox_full", "A caixa de entrada deste usuário está cheia");
         return;
     }
-    list << OfflineMsg{c->uniqueId(), c->name(), text, QDateTime::currentDateTime()};
+    list << OfflineMsg{c->uniqueId(), c->name(), text, QDateTime::currentDateTime(),
+                       obj["e2ee"].toBool(false)};
     saveData();
 
     QJsonObject ok = HProto::msg("offline_sent");
@@ -203,35 +237,14 @@ void ServerCore::handleWhisper(ClientSession* c, const QJsonObject& obj) {
     // alvos removidos e o canal voltam ao estado audível real.
     if (c->talking()) broadcastTalkingState(c);
 
-    // Distribui a chave do canal do remetente para cada alvo do sussurro.
-    //
-    // Os frames de voz trafegam por UDP cifrados com a chave do canal em que
-    // o remetente ESTÁ (não do canal do ouvinte). O welcome só entrega chaves
-    // do canal atual + canais vinculados; portanto, um sussurro cross-canal
-    // (remetente em A, alvo em B, A e B não vinculados) fazia o destinatário
-    // receber o pacote UDP via relay, mas sem a chave para decifrá-lo — áudio
-    // mudava para o alvo. Repassa a chave vigente do canal do remetente para
-    // todos os alvos; o cliente já prova todas as chaves conhecidas na
-    // decodificação, então basta existir no mapa "channelKeys[channelId]".
-    //
-    // Não há risco de eavesdrop: o relay só encaminha frames de voz de A para
-    // os alvos do sussurro; a chave não permite decifrar tráfego que não
-    // chegaria ao cliente de outra forma.
-    const int senderChan = channelOfUser(c->id());
-    if (senderChan > 0 && !ids.isEmpty()) {
-        if (!m_channelKeys.contains(senderChan)) rotateChannelKey(senderChan);
-        if (m_channelKeys.contains(senderChan)) {
-            const QString keyB64 = QString::fromLatin1(m_channelKeys[senderChan].toBase64());
-            QJsonObject km = HProto::msg("channel_key");
-            km["channel"] = senderChan;
-            km["key"] = keyB64;
-            for (const int tid : ids) {
-                if (tid == c->id()) continue;
-                ClientSession* target = m_clients.value(tid, nullptr);
-                if (target) target->send(km);
-            }
-        }
-    }
+    // v6 E2EE: a replicação da chave do canal do remetente para os alvos era
+    // feita AQUI (o servidor conhecia a chave — o coração da "falsa promessa"
+    // de E2EE). Agora o próprio remetente embrulha a chave vigente do canal
+    // em que ESTÁ para cada alvo fora do componente (X25519 efêmero + HKDF +
+    // AES-256-GCM via e2e_key) e re-embrulha a cada rotação enquanto o
+    // sussurro estiver ativo. O servidor segue apenas roteando os pacotes
+    // cifrados — o mesmo modelo de isolamento do relay: a chave só decifra
+    // tráfego que o relay já encaminharia ao alvo.
 }
 
 // =============================================== DADOS DE COMPLEMENTOS (v5)

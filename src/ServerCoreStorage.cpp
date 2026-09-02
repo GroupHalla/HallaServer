@@ -263,12 +263,15 @@ void ServerCore::loadData() {
             }
         }
 
-        if (q.exec("SELECT uid, name, firstSeen, lastSeen FROM clients")) {
+        if (q.exec("SELECT uid, name, firstSeen, lastSeen, idPub, dhPub, dhSig FROM clients")) {
             while (q.next()) {
                 RegClient rc;
                 rc.name = q.value(1).toString();
                 rc.firstSeen = QDateTime::fromString(q.value(2).toString(), Qt::ISODate);
                 rc.lastSeen = QDateTime::fromString(q.value(3).toString(), Qt::ISODate);
+                rc.idPub = QByteArray::fromBase64(q.value(4).toString().toLatin1());
+                rc.dhPub = QByteArray::fromBase64(q.value(5).toString().toLatin1());
+                rc.dhSig = QByteArray::fromBase64(q.value(6).toString().toLatin1());
                 m_registry[q.value(0).toString()] = rc;
             }
         }
@@ -288,7 +291,7 @@ void ServerCore::loadData() {
         }
 
         m_offline.clear();
-        if (q.exec("SELECT targetUid, fromUid, fromName, text, ts FROM offline_messages")) {
+        if (q.exec("SELECT targetUid, fromUid, fromName, text, ts, e2ee FROM offline_messages")) {
             while (q.next()) {
                 OfflineMsg om;
                 QString targetUid = q.value(0).toString();
@@ -296,6 +299,7 @@ void ServerCore::loadData() {
                 om.fromName = q.value(2).toString();
                 om.text = q.value(3).toString();
                 om.ts = QDateTime::fromString(q.value(4).toString(), Qt::ISODate);
+                om.e2ee = q.value(5).toBool();
                 m_offline[targetUid] << om;
             }
         }
@@ -501,8 +505,16 @@ bool ServerCore::initDatabase() {
            "`uid` VARCHAR(255) PRIMARY KEY, "
            "`name` VARCHAR(255), "
            "`firstSeen` VARCHAR(255), "
-           "`lastSeen` VARCHAR(255)"
+           "`lastSeen` VARCHAR(255), "
+           "`idPub` TEXT, "
+           "`dhPub` TEXT, "
+           "`dhSig` TEXT"
            ")");
+    // v6 E2EE: bancos criados antes das colunas de chaves públicas ganham
+    // a migração aqui (ALTER falha silenciosamente se já existirem).
+    q.exec("ALTER TABLE clients ADD COLUMN `idPub` TEXT");
+    q.exec("ALTER TABLE clients ADD COLUMN `dhPub` TEXT");
+    q.exec("ALTER TABLE clients ADD COLUMN `dhSig` TEXT");
            
     q.exec("CREATE TABLE IF NOT EXISTS bans ("
            "`uid` VARCHAR(255), "
@@ -529,8 +541,10 @@ bool ServerCore::initDatabase() {
                "`fromUid` VARCHAR(255), "
                "`fromName` VARCHAR(255), "
                "`text` TEXT, "
-               "`ts` VARCHAR(255)"
+               "`ts` VARCHAR(255), "
+               "`e2ee` TINYINT DEFAULT 0"
                ")");
+        q.exec("ALTER TABLE offline_messages ADD COLUMN `e2ee` TINYINT DEFAULT 0");
         q.exec("CREATE TABLE IF NOT EXISTS files ("
                "`id` INT AUTO_INCREMENT PRIMARY KEY, "
                "`chanId` INT, "
@@ -556,8 +570,10 @@ bool ServerCore::initDatabase() {
                "`fromUid` TEXT, "
                "`fromName` TEXT, "
                "`text` TEXT, "
-               "`ts` TEXT"
+               "`ts` TEXT, "
+               "`e2ee` INTEGER DEFAULT 0"
                ")");
+        q.exec("ALTER TABLE offline_messages ADD COLUMN `e2ee` INTEGER DEFAULT 0");
         q.exec("CREATE TABLE IF NOT EXISTS files ("
                "`id` INTEGER PRIMARY KEY AUTOINCREMENT, "
                "`chanId` INTEGER, "
@@ -667,7 +683,8 @@ void ServerCore::loadDataFromJson() {
             const QJsonObject o = v.toObject();
             m_offline[it.key()] << OfflineMsg{o["fromUid"].toString(), o["from"].toString(),
                                               o["text"].toString(),
-                                              QDateTime::fromString(o["ts"].toString(), Qt::ISODate)};
+                                              QDateTime::fromString(o["ts"].toString(), Qt::ISODate),
+                                              o["e2ee"].toBool(false)};
         }
     }
     for (const QJsonValue& v : root["files"].toArray()) {
@@ -840,12 +857,16 @@ void ServerCore::saveDataToSql() {
         }
     }
 
-    q.prepare("INSERT INTO clients (`uid`, `name`, `firstSeen`, `lastSeen`) VALUES (:uid, :name, :first, :last)");
+    q.prepare("INSERT INTO clients (`uid`, `name`, `firstSeen`, `lastSeen`, `idPub`, `dhPub`, `dhSig`) "
+              "VALUES (:uid, :name, :first, :last, :idPub, :dhPub, :dhSig)");
     for (auto it = m_registry.begin(); it != m_registry.end(); ++it) {
         q.bindValue(":uid", it.key());
         q.bindValue(":name", it.value().name);
         q.bindValue(":first", it.value().firstSeen.toString(Qt::ISODate));
         q.bindValue(":last", it.value().lastSeen.toString(Qt::ISODate));
+        q.bindValue(":idPub", QString::fromLatin1(it.value().idPub.toBase64()));
+        q.bindValue(":dhPub", QString::fromLatin1(it.value().dhPub.toBase64()));
+        q.bindValue(":dhSig", QString::fromLatin1(it.value().dhSig.toBase64()));
         if (!q.exec()) {
             log("SQL SAVE ERROR on clients: " + q.lastError().text());
         }
@@ -864,7 +885,7 @@ void ServerCore::saveDataToSql() {
         }
     }
 
-    q.prepare("INSERT INTO offline_messages (`targetUid`, `fromUid`, `fromName`, `text`, `ts`) VALUES (:targetUid, :fromUid, :fromName, :text, :ts)");
+    q.prepare("INSERT INTO offline_messages (`targetUid`, `fromUid`, `fromName`, `text`, `ts`, `e2ee`) VALUES (:targetUid, :fromUid, :fromName, :text, :ts, :e2ee)");
     for (auto it = m_offline.begin(); it != m_offline.end(); ++it) {
         for (const OfflineMsg& om : it.value()) {
             q.bindValue(":targetUid", it.key());
@@ -872,6 +893,7 @@ void ServerCore::saveDataToSql() {
             q.bindValue(":fromName", om.fromName);
             q.bindValue(":text", om.text);
             q.bindValue(":ts", om.ts.toString(Qt::ISODate));
+            q.bindValue(":e2ee", om.e2ee ? 1 : 0);
             if (!q.exec()) {
                 log("SQL SAVE ERROR on offline_messages: " + q.lastError().text());
             }

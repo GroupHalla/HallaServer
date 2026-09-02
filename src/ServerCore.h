@@ -27,6 +27,9 @@ struct Complaint {
 struct OfflineMsg {
     QString fromUid, fromName, text;
     QDateTime ts;
+    // v6 E2EE: true = text é ciphertext opaco (par-a-par) — entregue com a
+    // flag para o destinatário saber que decifra com fromUid.
+    bool e2ee = false;
 };
 // v3: metadados de um arquivo de canal
 struct FileMeta {
@@ -64,6 +67,12 @@ struct RegClient {
     QString name;
     QDateTime firstSeen;
     QDateTime lastSeen;
+    // v6 E2EE: chaves PÚBLICAS da identidade (idPub SPKI DER, dhPub X25519
+    // 32 bytes, dhSig Ed25519 64 bytes). Persistidas para que identity_get
+    // responda também por usuários OFFLINE — quem envia mensagem offline
+    // precisa do dhPub do destinatário ANTES de ele conectar. Material
+    // exclusivamente público: nada aqui permite decifrar conteúdo.
+    QByteArray idPub, dhPub, dhSig;
 };
 
 // Núcleo do servidor Halla: sessões, canais, permissões, chat, moderação.
@@ -232,10 +241,15 @@ private:
     // por addToChannel/removeFromChannels; channelOfUser ainda cai na
     // varredura quando um acesso direto a SvrChan::users escapa do cache.
     mutable QMap<int, int> m_userChannelCache;
-    QMap<int, QByteArray> m_channelKeys; // channelId -> key (16 bytes)
-    void rotateChannelKey(int channelId);
+    // v6 E2EE: o servidor NÃO guarda mais chaves de canal. Ele é um diretório
+    // de chaves públicas (idPub/dhPub/dhSig por sessão, publicados no user
+    // object) e um relay OPA CO de envelopes e2e_key — quem gera/embrulha
+    // chaves são os clientes (mestre determinístico = menor UID do
+    // componente). Nada aqui decifra conteúdo.
+    void handleE2eKey(ClientSession* c, const QJsonObject& obj);
+    void handleE2eKeyRequest(ClientSession* c, const QJsonObject& obj);
     // Componente conexo de canais (vínculos em ambos os sentidos) que compartilha
-    // a mesma chave e o mesmo áudio.
+    // o mesmo áudio (e, no cliente, a mesma chave E2EE).
     QSet<int> voiceComponentOf(int channelId) const;
     // O componente é determinístico a partir dos vínculos, que mudam raramente
     // (criar/excluir canal, link/unlink). Como relayVoice e broadcastTalkingState
@@ -334,6 +348,7 @@ private:
     void handleIconGet(ClientSession* c, const QJsonObject& obj);
     void handleIconSet(ClientSession* c, const QJsonObject& obj);
     void handleOfflineSend(ClientSession* c, const QJsonObject& obj);
+    void handleIdentityGet(ClientSession* c, const QJsonObject& obj);
     void handleComplaintAdd(ClientSession* c, const QJsonObject& obj);
     void handleComplaintList(ClientSession* c);
     void handleComplaintClear(ClientSession* c, const QJsonObject& obj);

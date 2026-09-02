@@ -8,11 +8,15 @@
 #include <QByteArray>
 
 // Protocolo v4: identidade Ed25519, voz AEAD e token UDP aleatório de 128 bits.
+// Protocolo v6: E2EE real — o servidor deixa de gerar/distribuir chaves de
+// canal (vira diretório de chaves públicas + relay opaco de e2e_key). Clientes
+// v1-v5 são recusados com bad_proto: transição dura, exigida pela promessa de
+// que o servidor não consegue ler conteúdo.
 namespace HProto {
 
 constexpr quint16 kDefaultPort = 9987;
-constexpr int kProtoVersion = 5;
-constexpr int kProtoMin = 1;
+constexpr int kProtoVersion = 6;
+constexpr int kProtoMin = 6;
 constexpr int kVoiceTokenBytes = 16;
 constexpr int kClientMediaHeaderV4Bytes = 4 + kVoiceTokenBytes + 2;
 
