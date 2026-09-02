@@ -42,6 +42,12 @@ jobs:
         run: |
           cmake -S . -B build -G "Ninja" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH="/mingw64" -DCMAKE_BUILD_TYPE=Release
 
+      - name: Install Python cryptography (E2EE tests)
+        shell: msys2 {0}
+        run: |
+          pacman -S --noconfirm python python-pip
+          python -m pip install --quiet cryptography
+
       - name: Build and test Server
         shell: msys2 {0}
         run: |
@@ -125,6 +131,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools build-essential libssl-dev libqt6sql6-sqlite libqt6sql6-mysql
+          sudo pip3 install cryptography
 
       - name: Configure CMake
         run: |
@@ -218,6 +225,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools build-essential libssl-dev libqt6sql6-sqlite libqt6sql6-mysql
+          sudo pip3 install cryptography
       - name: Configure and Build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release

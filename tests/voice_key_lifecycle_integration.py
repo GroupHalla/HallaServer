@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""End-to-end tests for the voice channel-key lifecycle.
+"""End-to-end tests for the E2EE key lifecycle (protocolo v6).
 
-Covers three contracts broken before these fixes:
+O servidor v6 NÃO conhece chaves de conteúdo. Contratos cobertos:
 
-1. `move` must deliver the destination channel's key to the mover.
-   Before, handleMove appended the user to the destination channel without
-   rotating/redistributing keys: the mover kept encrypting with the PREVIOUS
-   channel's key and nobody in the destination could decrypt the voice
-   ("audio stops until the server restarts").
+1. O welcome NÃO entrega channelKeys e o servidor NUNCA envia channel_key —
+   quem gera/embrulha chaves de grupo são os clientes (mestre = menor UID).
+   Regredir nisto devolveria o servidor ao modelo de confiança da "falsa
+   promessa" de E2EE.
 
-2. Key rotation (any join/leave in the whisperer's channel) must reach
-   whisper targets OUTSIDE the channel component. Before, only in-component
-   users received the rotated key, so a whisper went silent after the first
-   join/leave in the sender's channel.
+2. Relay opaco de e2e_key: bytes "enc" atravessam sem validação alguma (o
+   servidor não consegue abrir), com "from" preenchido pelo próprio relay.
 
-3. Re-sending an identical whisper set must not push channel_key to the
-   targets again (old desktop clients re-sent whisper on every user_state,
-   flooding the server and tripping the rate limit).
+3. e2e_key_request rota SÓ para membros do componente (ou todos, no escopo
+   servidor/canal 0); não-membro recebe no_permission — a chave de um canal
+   não pode ser pedida por quem está fora dele.
+
+4. Chat e2ee: texto opaco (base64) passa intacto até 1600 caracteres; acima
+   disso, bad_text — o limite cobre plaintext de 1024 em base64 com folga.
+
+(A criptografia de ponta a ponta de verdade — envelope, eleição de mestre,
+chat de grupo — é o e2ee_v6_integration.py, que usa o módulo `cryptography`.)
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ import time
 
 class Client:
     def __init__(self, host: str, port: int, work: Path,
-                 nickname: str, protocol: int = 5,
+                 nickname: str, protocol: int = 6,
                  admin_password: str = "") -> None:
         identity = work / "identities" / nickname
         identity.mkdir(parents=True, exist_ok=True)
@@ -52,6 +55,13 @@ class Client:
                 ["openssl", "pkey", "-in", str(private_key), "-pubout",
                  "-outform", "DER", "-out", str(public_key)],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # v6 E2EE: par X25519 + binding assinado (o login recusa sem eles).
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "e2ee_v6", Path(__file__).resolve().parent / "e2ee_v6.py")
+        _e2ee = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_e2ee)
+        self.v6 = _e2ee.V6Identity(identity)
 
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -73,13 +83,13 @@ class Client:
         der = public_key.read_bytes()
         uid = base64.b64encode(hashlib.sha256(der).digest()).decode()
         self.uid = uid
-        # Latest channel_key per channel id observed by this client.
-        self.latest_channel_key: dict[int, str] = {}
         self.send({
             "t": "hello", "proto": protocol, "uid": uid,
             "idPub": base64.b64encode(der).decode(), "nick": nickname,
             "adminPass": admin_password,
-            "ver": "voice-key-lifecycle", "platform": "Linux",
+            "ver": "e2ee-key-lifecycle", "platform": "Linux",
+            "dhPub": self.v6.hello_fields()["dhPub"],
+            "dhSig": self.v6.hello_fields()["dhSig"],
         })
         challenge = self.receive("identity_challenge")
         nonce = identity / "nonce.bin"
@@ -95,8 +105,6 @@ class Client:
         })
         self.welcome = self.receive("welcome")
         self.id = self.welcome["selfId"]
-        for chan_id, key in self.welcome.get("channelKeys", {}).items():
-            self.latest_channel_key[int(chan_id)] = key
 
     def send(self, message: dict) -> None:
         self.stream.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
@@ -108,20 +116,13 @@ class Client:
             if not line:
                 raise AssertionError("server closed the connection")
             message = json.loads(line)
-            if message.get("t") == "channel_key":
-                self.latest_channel_key[int(message["channel"])] = message["key"]
             if message.get("t") == message_type and predicate(message):
                 return message
         raise AssertionError(f"timeout waiting for {message_type}")
 
-    def quiet_for(self, seconds: float, channel: int | None = None) -> list[dict]:
-        """Collects every message arriving within the window without ever
-        letting a socket timeout fire mid-read (a timeout during readline()
-        leaves an SSL stream unusable — "cannot read from timed out object").
-        select() is used so readline() only runs when data is pending. With
-        `channel`, returns only channel_key messages for that channel. Used
-        to assert that NOTHING (e.g. no duplicate or stale channel_key) is
-        pushed."""
+    def drain(self, seconds: float = 0.8) -> list[dict]:
+        """Coleta tudo que chega na janela sem deixar o timeout disparar no
+        meio de um readline (readline após timeout inutiliza o stream SSL)."""
         collected: list[dict] = []
         deadline = time.monotonic() + seconds
         while True:
@@ -134,12 +135,7 @@ class Client:
             line = self.stream.readline()
             if not line:
                 break
-            message = json.loads(line)
-            if message.get("t") == "channel_key":
-                self.latest_channel_key[int(message["channel"])] = message["key"]
-                if channel is not None and int(message["channel"]) != channel:
-                    continue
-            collected.append(message)
+            collected.append(json.loads(line))
         return collected
 
     def close(self) -> None:
@@ -165,11 +161,11 @@ def main() -> None:
     if not server.is_file():
         raise SystemExit(f"server executable not found: {server}")
 
-    work = Path(tempfile.mkdtemp(prefix="halla-voice-keylife-"))
+    work = Path(tempfile.mkdtemp(prefix="halla-e2ee-keylife-"))
     port = free_port()
     config = work / "halla-server.ini"
     config.write_text(
-        "[server]\nname=Voice Key Lifecycle Integration\n"
+        "[server]\nname=E2EE Key Lifecycle Integration\n"
         f"port={port}\nmaxClients=8\nadminPassword=KeyLifeAdminSecret\n"
         "[query]\nport=0\n[database]\ntype=sqlite\n",
         encoding="utf-8")
@@ -184,6 +180,19 @@ def main() -> None:
                        admin_password="KeyLifeAdminSecret")
         clients.append(admin)
 
+        # ------------------------------------------------------------- part 1
+        # O welcome NÃO traz chaves (o servidor não as conhece) e nenhum
+        # channel_key chega — nem após join/leave/move/whisper.
+        assert "channelKeys" not in admin.welcome, (
+            "welcome entregou channelKeys: o servidor v6 não conhece chaves")
+        # Diretório público no user object: o próprio admin está lá com o trio.
+        users = {u["id"]: u for u in admin.welcome.get("users", [])}
+        me = users.get(admin.id, {})
+        assert me.get("idPub") and me.get("dhPub") and me.get("dhSig"), (
+            "user object sem o trio idPub/dhPub/dhSig")
+        assert base64.b64decode(me["dhPub"]) == admin.v6.dh_pub, (
+            "dhPub publicado diverge do enviado no hello")
+
         # Non-linked channel B for cross-channel scenarios.
         admin.send({"t": "chan_create", "name": "Sala B", "type": 2, "parent": 0})
         created = admin.receive(
@@ -195,10 +204,26 @@ def main() -> None:
         clients.append(mover)
         admin.receive("user_joined")
 
-        # ------------------------------------------------------------- part 1
-        # MOVE delivers the destination channel key to the mover. Before the
-        # fix the mover kept the previous channel's key: its voice was
-        # encrypted with a key nobody in the destination channel had.
+        # ------------------------------------------------------------- part 2
+        # Relay opaco de e2e_key: bytes preservados, "from" preenchido pelo
+        # servidor. Envelope propositalmente SEM sentido criptográfico — o
+        # servidor não valida (não consegue abrir).
+        opaque_envelope = base64.b64encode(bytes(range(96))).decode()
+        admin.send({"t": "e2e_key", "to": mover.id, "enc": opaque_envelope})
+        relayed = mover.receive(
+            "e2e_key", lambda m: m.get("enc") == opaque_envelope)
+        assert relayed["from"] == admin.id, (
+            f"relay não anotou o from: {relayed}")
+
+        # Destinatário inexistente: not_found (o relay confere o destino).
+        admin.send({"t": "e2e_key", "to": 999, "enc": opaque_envelope})
+        admin.receive("error", lambda m: m.get("code") == "not_found")
+
+        # ------------------------------------------------------------- part 3
+        # e2e_key_request: rota para membros do componente. Mover entra em B,
+        # pede a chave de B → quem está em B (ninguém além dele por ora — o
+        # pedido simplesmente não tem respondente, mas o SERVIDOR entrega o
+        # request aos membros: admin pede de FORA e leva no_permission).
         mover.send({"t": "move", "channel": channel_b})
         mover.receive("user_moved",
                       lambda m: m.get("id") == mover.id
@@ -206,35 +231,23 @@ def main() -> None:
         admin.receive("user_moved",
                       lambda m: m.get("id") == mover.id
                       and m.get("channel") == channel_b)
-        assert channel_b in mover.latest_channel_key, (
-            "mover never received the destination channel key: "
-            f"{mover.latest_channel_key}")
 
-        # ------------------------------------------------------------- part 2
-        # Whisper target OUTSIDE the channel keeps receiving rotated keys.
-        # Admin (channel 1) whispers to mover (channel B).
-        admin.send({"t": "whisper", "ids": [mover.id]})
-        admin.receive("whisper_ok", lambda m: m.get("count") == 1)
-        delivered = mover.receive(
-            "channel_key", lambda m: m.get("channel") == 1)
-        assert delivered["key"] == admin.latest_channel_key[1], (
-            "initial whisper key mismatch")
+        # Admin (fora de B) pedindo a chave de B: recusado.
+        admin.send({"t": "e2e_key_request", "channel": channel_b})
+        admin.receive("error", lambda m: m.get("code") == "no_permission")
 
-        # Rotation trigger: a third user connects and joins channel 1
-        # (admin's channel). The whisper target must receive the NEW key.
+        # Mover (dentro de B) pede: o request vai aos MEMBROS do componente
+        # (apenas o próprio mover está lá, e o servidor exclui o solicitante
+        # — ninguém recebe, e nada explode).
+        mover.send({"t": "e2e_key_request", "channel": channel_b})
+        quiet = admin.drain(0.8)
+        assert not any(m.get("t") == "e2e_key_request" for m in quiet), (
+            "request de membro vazou para quem está fora do componente")
+
+        # Membro de B recebe o request de outro membro.
         third = Client("127.0.0.1", port, work, "ThirdUser")
         clients.append(third)
         admin.receive("user_joined")
-        rotated = mover.receive(
-            "channel_key",
-            lambda m: m.get("channel") == 1
-            and m.get("key") != delivered["key"])
-        assert rotated["key"] == admin.latest_channel_key[1], (
-            f"whisper target kept a stale key: {rotated['key']} vs "
-            f"{admin.latest_channel_key[1]}")
-
-        # Members of a channel must always converge on the same key after a
-        # join: third moves into B and both B members share the rotated key.
         third.send({"t": "move", "channel": channel_b})
         third.receive("user_moved",
                       lambda m: m.get("id") == third.id
@@ -242,59 +255,45 @@ def main() -> None:
         mover.receive("user_moved",
                       lambda m: m.get("id") == third.id
                       and m.get("channel") == channel_b)
-        assert channel_b in third.latest_channel_key, (
-            f"third never received channel B key: {third.latest_channel_key}")
-        assert mover.latest_channel_key[channel_b] == third.latest_channel_key[channel_b], (
-            "channel B members hold different keys after a move: "
-            f"{mover.latest_channel_key[channel_b]} vs "
-            f"{third.latest_channel_key[channel_b]}")
+        mover.send({"t": "e2e_key_request", "channel": channel_b})
+        request = third.receive(
+            "e2e_key_request", lambda m: m.get("channel") == channel_b)
+        assert request["from"] == mover.id, request
 
-        # ------------------------------------------------------------- part 3
-        # Identical whisper re-send: whisper_ok yes, duplicate channel_key no.
-        admin.send({"t": "whisper", "ids": [mover.id]})
-        admin.receive("whisper_ok", lambda m: m.get("count") == 1)
-        stray = mover.quiet_for(0.8, channel=1)
-        assert not stray, (
-            f"identical whisper re-send pushed keys again: {stray}")
-
-        # Changing the set DOES push keys again (target re-resolution).
-        admin.send({"t": "whisper", "ids": []})
-        admin.receive("whisper_ok", lambda m: m.get("count") == 0)
-        admin.send({"t": "whisper", "ids": [mover.id]})
-        admin.receive("whisper_ok", lambda m: m.get("count") == 1)
-        mover.receive("channel_key", lambda m: m.get("channel") == 1)
+        # Escopo servidor (canal 0): TODOS os conectados recebem o pedido.
+        mover.send({"t": "e2e_key_request", "channel": 0})
+        admin.receive("e2e_key_request", lambda m: m.get("from") == mover.id)
+        third.receive("e2e_key_request", lambda m: m.get("from") == mover.id)
 
         # ------------------------------------------------------------- part 4
-        # Whisper target disconnect: whisperer's set is pruned, so a later
-        # rotation delivers keys ONLY to component users (no dead ids), and
-        # a fresh whisper to the reconnected target carries the live key.
-        mover.close()
-        clients.remove(mover)
-        admin.receive("user_left", lambda m: m.get("id") == mover.id)
-        mover2 = Client("127.0.0.1", port, work, "Mover")  # same identity, new session id
-        clients.append(mover2)
-        admin.receive("user_joined")
-        mover2.send({"t": "move", "channel": channel_b})
-        mover2.receive("user_moved",
-                       lambda m: m.get("id") == mover2.id
-                       and m.get("channel") == channel_b)
-        admin.receive("user_moved",
-                      lambda m: m.get("id") == mover2.id
-                      and m.get("channel") == channel_b)
-        # mover2's own move already delivered channel B's key; consume it.
-        # Rotation in channel 1 (mover2 left it when moving to B) must NOT
-        # reach mover2 anymore: the whisper set was pruned on disconnect.
-        stray2 = mover2.quiet_for(0.8, channel=1)
-        assert not stray2, (
-            f"pruned whisper still delivered keys: {stray2}")
-        # New whisper against the live session id carries the current key.
-        admin.send({"t": "whisper", "ids": [mover2.id]})
+        # Chat e2ee: opaco, com limite folgado; acima do limite, bad_text.
+        blob = base64.b64encode(bytes(64)).decode()
+        admin.send({"t": "chat", "scope": "server", "text": blob, "e2ee": True})
+        delivered_chat = mover.receive(
+            "chat", lambda m: m.get("scope") == "server"
+            and m.get("text") == blob and m.get("e2ee") is True)
+        assert delivered_chat["fromName"] == "KeyAdmin", delivered_chat
+
+        oversized = "A" * 1601
+        admin.send({"t": "chat", "scope": "server", "text": oversized, "e2ee": True})
+        admin.receive("error", lambda m: m.get("code") == "bad_text")
+
+        # ------------------------------------------------------------- part 5
+        # join/leave/move/whisper NÃO geram channel_key do servidor — o
+        # membro que precisa da chave pede (e2e_key_request) ou recebe o
+        # envelope de outro cliente.
+        admin.send({"t": "whisper", "ids": [mover.id]})
         admin.receive("whisper_ok", lambda m: m.get("count") == 1)
-        delivered2 = mover2.receive(
-            "channel_key", lambda m: m.get("channel") == 1)
-        assert delivered2["key"] == admin.latest_channel_key[1], (
-            f"post-reconnect whisper key mismatch: {delivered2['key']} vs "
-            f"{admin.latest_channel_key[1]}")
+        stray = mover.drain(0.8)
+        assert not any(m.get("t") == "channel_key" for m in stray), (
+            f"servidor v6 enviou channel_key: {stray}")
+
+        third.close()
+        clients.remove(third)
+        admin.receive("user_left", lambda m: m.get("id") == third.id)
+        stray2 = mover.drain(0.8)
+        assert not any(m.get("t") == "channel_key" for m in stray2), (
+            "rotação de leave ainda empurra channel_key no v6")
 
         for client in reversed(clients):
             client.close()
@@ -302,7 +301,7 @@ def main() -> None:
         process.send_signal(signal.SIGTERM)
         assert process.wait(timeout=10) == 0
         log.close()
-        print("Voice key lifecycle integration OK")
+        print("E2EE key lifecycle integration OK")
     except Exception:
         if process.poll() is None:
             process.terminate()

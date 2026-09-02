@@ -19,7 +19,7 @@ import time
 
 class Client:
     def __init__(self, host: str, port: int, work: Path,
-                 nickname: str, protocol: int = 5,
+                 nickname: str, protocol: int = 6,
                  admin_password: str = "") -> None:
         identity = work / nickname
         identity.mkdir(parents=True)
@@ -58,6 +58,8 @@ class Client:
             "idPub": base64.b64encode(der).decode(), "nick": nickname,
             "adminPass": admin_password,
             "ver": "plugin-data-integration", "platform": "Linux",
+            "dhPub": self.v6.hello_fields()["dhPub"],
+            "dhSig": self.v6.hello_fields()["dhSig"],
         })
         challenge = self.receive("identity_challenge")
         nonce = identity / "nonce.bin"

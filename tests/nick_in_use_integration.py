@@ -43,7 +43,14 @@ def make_identity(work: Path, name: str) -> tuple[Path, Path, bytes, str]:
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     der = public_key.read_bytes()
     uid = base64.b64encode(hashlib.sha256(der).digest()).decode()
-    return private_key, identity, der, uid
+    # v6: o login exige dhPub/dhSig — a variante crua conecta com o par também.
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "e2ee_v6", Path(__file__).resolve().parent / "e2ee_v6.py")
+    _e2ee = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_e2ee)
+    v6 = _e2ee.V6Identity(identity)
+    return private_key, identity, der, uid, v6
 
 
 def sign(private_key: Path, identity: Path, nonce_b64: str) -> str:
@@ -59,9 +66,9 @@ def sign(private_key: Path, identity: Path, nonce_b64: str) -> str:
 
 class Client:
     def __init__(self, host: str, port: int, work: Path,
-                 nickname: str, protocol: int = 5,
+                 nickname: str, protocol: int = 6,
                  admin_password: str = "") -> None:
-        private_key, identity, der, uid = make_identity(work, nickname)
+        private_key, identity, der, uid, self.v6 = make_identity(work, nickname)
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
@@ -84,6 +91,8 @@ class Client:
             "idPub": base64.b64encode(der).decode(), "nick": nickname,
             "adminPass": admin_password,
             "ver": "nick-in-use", "platform": "Linux",
+            "dhPub": self.v6.hello_fields()["dhPub"],
+            "dhSig": self.v6.hello_fields()["dhSig"],
         })
         challenge = self.receive("identity_challenge")
         self.send({
@@ -137,7 +146,7 @@ def connect_raw(host: str, port: int, work: Path, identity_name: str, requested_
     Completes the identity handshake when challenged; immediate errors
     (e.g. bad_nick arrives BEFORE the challenge) are stored in
     holder.pending_error."""
-    private_key, identity, der, uid = make_identity(work, identity_name)
+    private_key, identity, der, uid, v6 = make_identity(work, identity_name)
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
@@ -151,9 +160,11 @@ def connect_raw(host: str, port: int, work: Path, identity_name: str, requested_
     holder.stream = stream
     holder.pending_error = None
     holder.send({
-        "t": "hello", "proto": 5, "uid": uid,
+        "t": "hello", "proto": 6, "uid": uid,
         "idPub": base64.b64encode(der).decode(), "nick": requested_nick,
         "ver": "nick-in-use", "platform": "Linux",
+        "dhPub": v6.hello_fields()["dhPub"],
+        "dhSig": v6.hello_fields()["dhSig"],
     })
     first = json.loads(stream.readline())
     if first.get("t") == "error":

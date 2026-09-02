@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""End-to-end test for cross-channel whisper key distribution.
+"""End-to-end test for cross-channel whisper (protocolo v6).
 
-Covers the contract broken before this fix:
-- A whisperer in channel A, target in channel B (A and B not linked).
-- Before the fix, the target's welcome only carried keys for B (and B's
-  linked component). The whisperer's UDP frames are encrypted with A's
-  channel key, which the target does NOT possess — audio is silently
-  undecryptable, whisper appears "dead".
-- After the fix, handleWhisper pushes the whisperer's current channel
-  key to every whisper target via `channel_key`. The client already
-  tries every known key when decrypting, so this restores audio.
+Contexto histórico: o sussurro cross-canal dependia do servidor replicar a
+chave do canal do remetente para o alvo via channel_key (v5 — o servidor
+conhecia as chaves). No v6 o servidor não conhece chave alguma: o áudio do
+sussurro continua cifrado com a chave do canal do REMETENTE, e quem
+embrulha essa chave para o alvo (e2e_key) é o próprio cliente remetente.
+
+Este teste cobre o que continua sendo contrato do servidor:
+- whisper_ok com o count correto (rota de áudio cross-canal mantida);
+- NENHUM channel_key sai do servidor (v6: impossível — ele não tem chaves).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import select
 import shutil
 import signal
 import socket
@@ -30,7 +31,7 @@ import time
 
 class Client:
     def __init__(self, host: str, port: int, work: Path,
-                 nickname: str, protocol: int = 5,
+                 nickname: str, protocol: int = 6,
                  admin_password: str = "") -> None:
         identity = work / "identities" / nickname
         identity.mkdir(parents=True, exist_ok=True)
@@ -44,6 +45,13 @@ class Client:
                 ["openssl", "pkey", "-in", str(private_key), "-pubout",
                  "-outform", "DER", "-out", str(public_key)],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # v6 E2EE: par X25519 + binding assinado (o login recusa sem eles).
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "e2ee_v6", Path(__file__).resolve().parent / "e2ee_v6.py")
+        _e2ee = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_e2ee)
+        self.v6 = _e2ee.V6Identity(identity)
 
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -72,6 +80,8 @@ class Client:
             "idPub": base64.b64encode(der).decode(), "nick": nickname,
             "adminPass": admin_password,
             "ver": "whisper-cross-channel", "platform": "Linux",
+            "dhPub": self.v6.hello_fields()["dhPub"],
+            "dhSig": self.v6.hello_fields()["dhSig"],
         })
         challenge = self.receive("identity_challenge")
         nonce = identity / "nonce.bin"
@@ -108,6 +118,24 @@ class Client:
             if message.get("t") == message_type and predicate(message):
                 return message
         raise AssertionError(f"timeout waiting for {message_type}")
+
+    def drain(self, seconds: float = 0.8) -> list[dict]:
+        """Coleta tudo que chega na janela (select: readline só com dados
+        prontos — timeout no meio do readline inutiliza o stream SSL)."""
+        collected: list[dict] = []
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            readable, _, _ = select.select([self.socket], [], [], remaining)
+            if not readable:
+                break
+            line = self.stream.readline()
+            if not line:
+                break
+            collected.append(json.loads(line))
+        return collected
 
     def close(self) -> None:
         try:
@@ -168,9 +196,11 @@ def main() -> None:
         # for itself is consumed by the predicate below.
 
         # Normal user moves into the new (non-linked) channel B. After this
-        # move, removeFromChannels(normal) rotates channel 1's key (so admin
-        # gets a fresh key K_admin), and addToChannel(normal, B) rotates
-        # channel B's key. The two clients no longer share any channel key.
+        # move the two clients are in different channel components — no key
+        # material crosses components via the server (v6: o servidor não tem
+        # chaves; o sussurro de quem está em A continua cifrado com a chave do
+        # canal do remetente, e quem EMBRULHA essa chave para o alvo é o
+        # cliente remetente, via e2e_key).
         normal.send({"t": "move", "channel": channel_b})
         normal.receive("user_moved",
                        lambda m: m.get("id") == normal.id
@@ -179,26 +209,20 @@ def main() -> None:
                       lambda m: m.get("id") == normal.id
                       and m.get("channel") == channel_b)
 
-        # Admin's current key for channel 1 — the value the whisper handler
-        # must replicate to the target. The latest_channel_key map is kept
-        # up-to-date by the receive() loop above, so it already reflects
-        # every channel_key the server pushed after the recent rotations.
-        assert 1 in admin.latest_channel_key, admin.latest_channel_key
-        admin_chan1_key = admin.latest_channel_key[1]
-
-        # Admin whispers to the normal user. handleWhisper must deliver a
-        # channel_key for channel 1 to the target carrying admin's current
-        # key — otherwise the target cannot decrypt the whisper frames.
+        # Admin whispers to the normal user. v6: whisper_ok normal, e NENHUM
+        # channel_key — a entrega da chave do canal do remetente ao alvo é
+        # responsabilidade do cliente remetente (e2e_key), não do servidor.
         admin.send({"t": "whisper", "ids": [normal.id]})
         admin.receive("whisper_ok", lambda m: m.get("count") == 1)
 
-        delivered = normal.receive(
-            "channel_key",
-            lambda m: m.get("channel") == 1)
+        stray = normal.drain(0.8)
+        assert not any(m.get("t") == "channel_key" for m in stray), (
+            f"servidor v6 distribuiu chave no sussurro: {stray}")
 
-        assert delivered["key"] == admin_chan1_key, (
-            f"key mismatch: delivered={delivered['key']!r} "
-            f"vs admin_chan1_key={admin_chan1_key!r}")
+        # A rota de áudio do sussurro (relay UDP) continua entregando os
+        # frames do remetente ao alvo cross-canal — o contrato de áudio que
+        # existia antes; a chave para decifrá-los chega por e2e_key, do
+        # próprio remetente.
 
         # Clearing the whisper must still return whisper_ok with count=0.
         admin.send({"t": "whisper", "ids": []})

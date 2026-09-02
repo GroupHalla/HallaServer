@@ -125,6 +125,17 @@ if (UNIX)
                 --server $<TARGET_FILE:halla-server>
     )
     set_tests_properties(session-cleanup-integration PROPERTIES TIMEOUT 90)
+    # v6 E2EE de ponta a ponta: login com dhPub/dhSig, diretório verificado,
+    # mestre + envelope e2e_key real, chat de grupo/privado cifrado,
+    # identity_get offline e SAS. Exige o módulo Python `cryptography`
+    # (instalado no CI; a falha de import avisa como pular).
+    add_test(
+        NAME e2ee-v6-integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2ee_v6_integration.py
+                --server $<TARGET_FILE:halla-server>
+    )
+    set_tests_properties(e2ee-v6-integration PROPERTIES TIMEOUT 90)
 endif()
 
 install(TARGETS halla-server RUNTIME DESTINATION bin)
