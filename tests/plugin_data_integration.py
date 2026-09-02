@@ -32,6 +32,13 @@ class Client:
             ["openssl", "pkey", "-in", str(private_key), "-pubout",
              "-outform", "DER", "-out", str(public_key)],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # v6 E2EE: par X25519 + binding assinado (o login recusa sem eles).
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "e2ee_v6", Path(__file__).resolve().parent / "e2ee_v6.py")
+        _e2ee = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_e2ee)
+        self.v6 = _e2ee.V6Identity(identity)
 
         context = ssl.create_default_context()
         context.check_hostname = False

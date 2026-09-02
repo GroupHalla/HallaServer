@@ -255,12 +255,18 @@ def main() -> None:
         mover.receive("user_moved",
                       lambda m: m.get("id") == third.id
                       and m.get("channel") == channel_b)
+        # O rate limit do e2e_key_request é 1 por 2s por sessão (anti-flood
+        # da auto-cura): o pedido anterior do mover ainda está na janela —
+        # espera ela fechar antes do request que o teste quer ver entregue.
+        time.sleep(2.1)
         mover.send({"t": "e2e_key_request", "channel": channel_b})
         request = third.receive(
             "e2e_key_request", lambda m: m.get("channel") == channel_b)
         assert request["from"] == mover.id, request
 
-        # Escopo servidor (canal 0): TODOS os conectados recebem o pedido.
+        # Escopo servidor (canal 0): TODOS os conectados recebem o pedido
+        # (respeitando a janela de 2s do rate limit do mover).
+        time.sleep(2.1)
         mover.send({"t": "e2e_key_request", "channel": 0})
         admin.receive("e2e_key_request", lambda m: m.get("from") == mover.id)
         third.receive("e2e_key_request", lambda m: m.get("from") == mover.id)

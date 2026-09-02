@@ -55,8 +55,17 @@ class Client:
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        raw = socket.create_connection((host, port), timeout=5)
-        self.socket = context.wrap_socket(raw, server_hostname="HallaServer")
+        last_error: Exception | None = None
+        for _ in range(100):
+            try:
+                raw = socket.create_connection((host, port), timeout=0.5)
+                self.socket = context.wrap_socket(raw, server_hostname="HallaServer")
+                break
+            except Exception as error:
+                last_error = error
+                time.sleep(0.1)
+        else:
+            raise AssertionError(f"server unavailable: {last_error}")
         self.socket.settimeout(5)
         self.stream = self.socket.makefile("rwb", buffering=0)
 
