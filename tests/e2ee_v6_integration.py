@@ -229,10 +229,14 @@ def main() -> None:
             assert (got_epoch, got_key, got_channels) == (epoch, group_key, [0]), \
                 "envelope aberto com conteúdo diferente do embrulhado"
 
-        # Envelope para um DH pub ERRADO não abre (AEAD rejeita).
-        wrong = e2.envelope_wrap(bytes(32), e2.DOMAIN_KEY_WRAP, plain)
+        # Envelope para um DH pub VÁLIDO mas ERRADO: o wrap funciona (chave
+        # de verdade, só não é a do Bob) — o Bob não consegue abrir (o ECDH
+        # dele deriva outra chave; o AEAD rejeita).
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        wrong_pub = X25519PrivateKey.generate().public_key().public_bytes_raw()
+        wrong = e2.envelope_wrap(wrong_pub, e2.DOMAIN_KEY_WRAP, plain)
         try:
-            e2.envelope_unwrap(bob.v6.dh_pub, e2.DOMAIN_KEY_WRAP, wrong)
+            e2.envelope_unwrap(bob.v6.dh_priv, e2.DOMAIN_KEY_WRAP, wrong)
             raise AssertionError("envelope aberto pelo destinatário errado")
         except Exception as exc:
             assert "InvalidTag" in type(exc).__name__ or "decrypt" in str(exc).lower()
