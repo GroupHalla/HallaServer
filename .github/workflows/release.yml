@@ -42,14 +42,6 @@ jobs:
         run: |
           cmake -S . -B build -G "Ninja" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH="/mingw64" -DCMAKE_BUILD_TYPE=Release
 
-      - name: Install Python cryptography (E2EE tests)
-        shell: msys2 {0}
-        run: |
-          # O PATH do MINGW64 resolve `python` para /mingw64/bin/python — o
-          # pip tem que ser do pacote MINGW (o `python` do pacman é o do MSYS).
-          pacman -S --noconfirm mingw-w64-x86_64-python-pip
-          python -m pip install --quiet cryptography
-
       - name: Build and test Server
         shell: msys2 {0}
         run: |
