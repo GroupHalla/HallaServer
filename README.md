@@ -1,8 +1,8 @@
-# Halla Server 1.1.51
+# Halla Server 1.1.67
 
-Servidor Qt para Halla Desktop 1.0.50+ e Halla Mobile 1.0.41+. O Desktop
-1.0.64 adiciona o transporte de complementos v5; clientes anteriores continuam
-compatíveis dentro do intervalo v1–v5.
+Servidor Qt para Halla Desktop 1.1.18+ e Halla Mobile 1.0.95+. O protocolo
+v6 exige E2EE real: chaves de conteúdo geradas e distribuídas pelos clientes
+(o servidor é relay opaco); clientes v5 e anteriores são recusados no login.
 
 ### Programa de Feedback e Relato de Problemas —  Halla
 Com o avanço contínuo do ecossistema Halla (Desktop, Mobile e Server), nosso compromisso é garantir a máxima estabilidade, segurança e desempenho em transmissões de voz e tela.
@@ -24,7 +24,8 @@ Agradecemos a colaboração de todos no fortalecimento da plataforma.
 ## Transportes
 
 - Controle JSON: TCP/TLS 9987
-- Voz Opus AEAD: UDP 9987
+- Voz Opus AEAD: UDP 9987 (chaves de grupo E2EE geradas pelos clientes; o servidor não decifra)
+- E2EE v6: envelopes `e2e_key` opacos roteados por sessão, diretório de identidades (`identity_get`) e chat/poke/offline cifrados ponta a ponta
 - Signaling WebRTC: pelo controle TLS; vídeo e áudio da tela trafegam via WebRTC
 - Qualidade de live limitada por resolução, FPS e `screenshareBitrateKbps` do INI
 - Dados de complementos v5: TLS, isolamento por canal e permissões `pluginData`/`pluginDataGlobal`
@@ -53,7 +54,8 @@ presets (720p, 1080p, 1440p e 2160p; 30/60 FPS) somente até esses tetos. Por
 exemplo, 1920×1080, 60 FPS e 8000 kbps oferece até 1080p60, nunca 1440p/2160p.
 
 Leia [`SECURITY.md`](SECURITY.md) antes de expor o servidor à internet e
-[`PROTOCOL.md`](PROTOCOL.md) para a especificação v5. Nunca configure
+[`PROTOCOL.md`](PROTOCOL.md) para a especificação v6 (E2EE, sussurro
+cross-canal com envelopes de chave, SAS de verificação). Nunca configure
 `adminPassword=troque-esta-senha`; esse placeholder faz o startup abortar.
 
 ## Pterodactyl

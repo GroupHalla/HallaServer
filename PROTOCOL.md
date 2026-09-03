@@ -1,13 +1,15 @@
 
-# Halla Protocol — Especificação (v1 → v5 + Camada de Segurança + WebRTC)
+# Halla Protocol — Especificação (v1 → v6 + E2EE + WebRTC)
 
 Protocolo aberto do Halla (cliente ↔ servidor). Documentado para que qualquer
 pessoa possa implementar clientes, bots e ferramentas compatíveis.
 
-> **Estado atual:** servidor Halla ≥ 1.1.51 e cliente desktop ≥ 1.0.64
-> implementam o protocolo v5; clientes anteriores continuam aceitos dentro do
-> intervalo anunciado pelo servidor. O Mobile atual também negocia v5. A
-> camada de segurança (TLS, identidade Ed25519, voz AEAD) é **obrigatória** para todas as conexões — não é negociável por versão.
+> **Estado atual:** servidor Halla ≥ 1.1.66, cliente desktop ≥ 1.1.18 e
+> Mobile ≥ 1.0.95 implementam o protocolo v6. O servidor aceita
+> **exclusivamente v6** (`kProtoVersion = 6`, `kProtoMin = 6`): clientes v5 e
+> anteriores são recusados no login e devem atualizar. A camada de segurança
+> (TLS, identidade Ed25519, voz AEAD) é **obrigatória** para todas as conexões
+> — não é negociável por versão.
 
 ## Visão geral
 
@@ -63,37 +65,102 @@ Regras:
 - Bans, grupos e chaves de privilégio são vinculados ao UID derivado,
   tornando spoofing de identidade impraticável.
 
-### Chaves de voz por canal
+### E2EE v6 — chaves geradas pelos clientes, servidor como relay opaco
 
-- Cada canal possui uma chave simétrica de **32 bytes**
-  (`QRandomGenerator::system()` no servidor).
-- **Canais vinculados (link) compartilham a mesma chave** por componente
-  conexo — quem ouve através de link precisa decifrar frames vindos de
-  qualquer canal do componente, e o servidor continua sendo relay puro.
-- Distribuição ao cliente:
-  - `welcome.channelKeys` — mapa `{ "idCanal": base64(chave) }` para o canal
-    atual do cliente e seu componente de vínculo (evita corrida com `m_ready`);
-  - mensagem `channel_key { channel, key }` a qualquer momento.
-- **Rotação:** a chave do componente é rotacionada quando vínculos mudam
-  (`chan_link`) e quando a composição do canal muda (entrada/saída de
-  usuários, incluindo `move`), provendo forward secrecy básica. Todos os
-  membros do componente recebem todas as chaves do componente; **alvos de
-  sussurro fora do componente também recebem as chaves rotacionadas** para
-  continuarem decifrando a voz de quem sussurra a partir dele. Ao entrar em
-  um canal (conexão ou `move`), o cliente recebe a chave vigente do canal
-  destino.
-- **Deduplicação de `whisper`:** reenviar o mesmo conjunto de ids é aceito
-  (`whisper_ok` normal), mas não replica `channel_key` novamente aos alvos.
-- **Alvos desconectados:** quando um cliente cai, seu id de sessão é podado
-  dos conjuntos de sussurro dos demais; o conjunto vazio devolve a voz ao
-  canal normal.
+A partir do v6, o servidor **não gera, não distribui e não conhece nenhuma
+chave de conteúdo** (a antiga mensagem `channel_key` foi extinta). Toda a
+criptografia de conteúdo nasce nos clientes:
+
+- **Identidade dupla**: além do par Ed25519 da identidade, cada cliente
+  possui um par **X25519** para ECDH. O `hello` traz `dhPub` (pública
+  X25519, 32 bytes crus em base64) e `dhSig` — assinatura Ed25519 de
+  `"HALLA-DH-V1" ‖ dhPub`, que liga a X25519 à identidade. O servidor valida
+  o binding UMA vez no login (inválido → `bad_identity`, conexão encerrada
+  — "sem dhPub/dhSig válido não há E2EE") e publica o trio
+  `idPub`/`dhPub`/`dhSig` no objeto `user` de cada cliente online e no
+  registro de identidades (para `identity_get`). Cada cliente re-verifica
+  localmente — o servidor não é raiz de confiança.
+- **Chaves de grupo por componente**: cada componente de canais vinculados
+  possui uma chave simétrica de 32 bytes gerada pelo **mestre** — o membro
+  de **menor UID online** do componente (derivável sem coordenação: todos
+  computam o mesmo mestre a partir da lista de presença). O escopo servidor
+  (chat público) é o canal lógico **0**. Rotação em entrada/saída/
+  movimentação/vínculo de canal, com época monotônica.
+- **Distribuição por envelope `e2e_key`**: o mestre embrulha a chave para
+  cada membro com X25519 **efêmera** + HKDF-SHA256 + AES-256-GCM (PFS por
+  envelope — revelar a privada estática de uma sessão antiga não abre
+  envelopes futuros); o servidor apenas roteia o envelope opaco por id de
+  sessão e acrescenta `from`. Se o servidor mentir o `from`, o AEAD
+  simplesmente não abre (chave de wrap errada).
+- **Re-entrega `e2e_key_request`**: quem acabou de entrar e ainda não tem a
+  chave pede ao componente; qualquer membro que já a tenha pode
+  re-embrulhá-la (o mestre é responsável default, não ponto único de
+  falha). Envelopes são idempotentes por época.
+- **Sussurro cross-canal**: o **próprio remetente** embrulha a chave
+  vigente do seu canal para cada alvo fora do componente via `e2e_key` e
+  re-embrulha a cada rotação enquanto o sussurro estiver ativo. A
+  deduplicação de conjuntos idênticos de `whisper` continua valendo.
+- **Diretório offline (`identity_get`)**: para cifrar mensagem offline a
+  um usuário desconectado, o cliente pede `idPub`/`dhPub`/`dhSig` do UID ao
+  registro de identidades do servidor.
+- **Voz e tela**: as chaves de grupo alimentam o AEAD de voz (seção
+  seguinte); o cliente **não transmite frame sem chave vigente** — a rota
+  UDP não tem TLS, e sem chave o pacote não sai.
+
+Domínios de separação (strings usadas como salt/info/AAD em HKDF e
+AES-GCM): `HALLA-DH-V1` (binding), `HALLA-E2EKEY-V1` (envelopes de chave),
+`HALLA-CHAT-V1`, `HALLA-POKE-V1`, `HALLA-OFFLINE-V1` (conteúdo par-a-par) e
+`HALLA-SAS-V1` (verificação).
+
+#### Formato do envelope `e2e_key`
+
+O envelope é binário, enviado em base64 no campo `enc` (≤ 4096 caracteres
+no controle):
+
+```
+ephPub (32 B, X25519 efêmera) | nonce (12 B) | ciphertext | tag (16 B)
+```
+
+- chave de wrap = HKDF-SHA256(ECDH(efêmera, dhPub do destinatário), 32 B),
+  com o domínio `HALLA-E2EKEY-V1` como salt, info e AAD;
+- o plaintext embrulhado é a chave de grupo do componente:
+
+```
+epoch (8 B, u64 BE) | key (32 B) | nCanais (4 B, BE) | canalId (4 B cada, BE; ≤ 64)
+```
+
+#### Conteúdo par-a-par (chat privado, poke, offline)
+
+Chat privado, poke e mensagem offline usam derivação **estático-estática**:
+chave = HKDF-SHA256(ECDH(minhaPriv, dhPubDoPar), domínio próprio). A
+simetria — `pairwise(aPriv, bPub)` abre com `pairwise(bPriv, aPub)` — é o
+que permite mensagem offline decifrável sem as duas pontas online. O blob
+trafega como base64 de `nonce(12) | ciphertext | tag(16)` no campo de
+texto da mensagem, marcado com `"e2ee": true` (opaco ao servidor).
+
+#### Verificação de identidade (SAS)
+
+Cada par de usuários pode conferir fora de banda um **código SAS de 9
+dígitos**:
+
+```
+SAS = SHA-256( "HALLA-SAS-V1" ‖ min(idPubA, idPubB) ‖ max(idPubA, idPubB) )
+      últimos 4 bytes, big-endian, módulo 10^9   (colisão ≈ 1/10^9)
+```
+
+O código é derivado exclusivamente das chaves públicas Ed25519 — um MITM
+no servidor que substitua chaves produz códigos diferentes nas duas pontas
+e é detectado na comparação verbal. O marcador "verificado" é estado local
+de cada cliente, por UID; não há mensagem de protocolo.
 
 ### Voz e screen share: ChaCha20-Poly1305 (AEAD)
 
 - Algoritmo: **ChaCha20-Poly1305 (IETF)** — nonce de 12 bytes, tag de 16 bytes.
   Implementações de referência: OpenSSL (`EVP_chacha20_poly1305`) no desktop,
   mbedTLS (`mbedtls_chachapoly`) no mobile.
-- Chave: chave de 32 bytes do canal do **remetente**.
+- Chave: chave de grupo de 32 bytes do componente do **remetente** — gerada
+  e distribuída pelos clientes (seção E2EE v6 acima); o servidor nunca a
+  vê.
 - **Nonce (12 bytes, little-endian):**
 
 ```
@@ -132,7 +199,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 |---|---|---|---|
 | `server_probe` | C→S | — | Consulta pública (via TLS); não cria sessão |
 | `server_probe` | S→C | `server:{name,motd,ver,maxClients}`, `clients`, `maxClients` | Resposta |
-| `hello` | C→S | `proto` (1..5), `uid`, `nick`, `idPub` (base64 DER), `pass?`, `adminPass?`, `ver`, `platform` | Login. Apelido vazio → `bad_nick`; apelido em uso por OUTRA identidade online → `name_in_use` (conexão encerrada; o titular mantém o nome). Reconexão com o MESMO `uid` substitui a sessão anterior |
+| `hello` | C→S | `proto` (**6**), `uid`, `nick`, `idPub` (base64 DER), `dhPub` (base64, 32 B crus), `dhSig` (base64, 64 B — Ed25519 de `"HALLA-DH-V1" ‖ dhPub`), `pass?`, `adminPass?`, `ver`, `platform` | Login. O binding `dhPub`/`dhSig` é validado antes do `welcome` (ausente/inválido → `bad_identity`, conexão encerrada). Apelido vazio → `bad_nick`; apelido em uso por OUTRA identidade online → `name_in_use` (conexão encerrada; o titular mantém o nome). Reconexão com o MESMO `uid` substitui a sessão anterior |
 | `identity_challenge` | S→C | `nonce` (base64, 32 B) | Desafio Ed25519 |
 | `identity_proof` | C→S | `sig` (base64) | Assinatura do nonce |
 | `welcome` | S→C | ver abaixo | Estado completo após login |
@@ -144,7 +211,7 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
 {
   "t": "welcome",
   "selfId": 5,
-  "proto": 5,
+  "proto": 6,
   "server": {
     "name": "Servidor Halla", "motd": "…", "ver": "1.1.34",
     "platform": "Linux", "maxClients": 32, "banner": "base64…",
@@ -157,10 +224,12 @@ delimitador), codificados em UTF-8. Limite de **2 MiB por mensagem**.
   "groups":   [ { "id":1, "name":"guest", "perms":{…} } ],
   "myPerms":  { "…": true },
   "voice":    { "udp": 9987, "token": "001122…eeff", "format": "hex128" },
-  "iceServers": [{ "urls": "stun:…" }, { "urls": "turn:…", "username": "…", "credential": "…" }],
-  "channelKeys": { "1": "base64(32 bytes)…" }
+  "iceServers": [{ "urls": "stun:…" }, { "urls": "turn:…", "username": "…", "credential": "…" }]
 }
 ```
+
+(v6 não distribui mais `channelKeys` no `welcome`: as chaves de voz são de
+grupo geradas pelos clientes — seção E2EE v6.)
 
 `myPerms` reúne as permissões efetivas de todos os cargos do UID. Para uma
 identidade com privilégio individual total, inclui `"*": true`.
@@ -185,8 +254,13 @@ o da **identidade do alvo**.
  "icon":"base64…","order":1,"orderEnabled":true,
  "gid":3,"position":10,"groupPosition":10,"siglaPosition":10,
  "mic":false,"spk":false,"away":false,"rec":false,"cc":false,
- "talking":false,"whispering":false,"screensharing":false,"av":"sha1…"}
+ "talking":false,"whispering":false,"screensharing":false,"av":"sha1…",
+ "idPub":"base64 (DER)","dhPub":"base64 (32 B)","dhSig":"base64 (64 B)"}
 ```
+
+`idPub`/`dhPub`/`dhSig` (v6) publicam o material de chave E2EE do usuário
+online — o diretório que os demais clientes usam para embrulhar chaves de
+grupo, cifrar conteúdo par-a-par e verificar o binding localmente.
 
 `sigla` contém as siglas efetivas que aparecem antes do nome e
 `siglaSuffix`, as que aparecem depois. `order` é a menor ordem entre os cargos
@@ -236,7 +310,7 @@ destino configurado.
 | Mensagem | Campos | Descrição |
 |---|---|---|
 | `ping` | `ts` | Latência (resposta `pong` com mesmo `ts`) |
-| `chat` | `scope` (`server`/`channel`/`private`), `to?`, `text` | Mensagem de chat |
+| `chat` | `scope` (`server`/`channel`/`private`), `to?`, `text`, `e2ee?` | Mensagem de chat. Com `"e2ee": true`, `text` é base64 opaco (`nonce 12 ‖ ct ‖ tag 16`, ≤ 1600 caracteres) cifrado com a chave de grupo do escopo (`server` = canal lógico 0) ou par-a-par (`private`); o servidor apenas repassa o marcador |
 | `move` | `channel`, `pass?` | Trocar de canal |
 | `move_other` | `id`, `channel` | Mover outro cliente (perm `move` + hierarquia). A autoridade de quem move **substitui** as permissões de `join`/`view` do alvo sobre o destino — só as permissões do executor sobre o canal contam (com bypass de administrador total) |
 | `voice_hello` | — | Solicita token/UDP (`voice_token`) |
@@ -244,7 +318,7 @@ destino configurado.
 | `status` | `mic?`,`spk?`,`away?`,`rec?`,`cc?` | Estados do próprio usuário |
 | `nick` | `name`, `id?` | Alterar apelido (próprio; `id` opcional renomeia outro cliente — exige perm `move` e hierarquia) |
 | `desc` | `text` | Alterar descrição |
-| `poke` | `to`, `msg` | Cutucar cliente |
+| `poke` | `to`, `msg`, `e2ee?` | Cutucar cliente. Com `"e2ee": true`, `msg` é base64 opaco (≤ 256 caracteres) cifrado par-a-par |
 | `volume` | `to`, `db` (−40..12) | Informativo (volume é aplicado localmente) |
 | `chan_create` | `name`,`parent`,`topic?`,`desc?`,`pass?`,`type`,`codec`,`quality`,`max`,`moderated?`,`tempParent?` | Criar canal |
 | `chan_edit` | `id` + campos de `chan_create`, `op_add?`,`op_del?` | Editar canal / operadores |
@@ -266,11 +340,14 @@ destino configurado.
 | `avatar_get` | `uid` | Pedir avatar de um cliente |
 | `icon_set` | `name`, `data` | Definir ícone de grupo |
 | `icon_get` | `name` | Pedir ícone |
-| `offline_send` | `uid`, `text` (≤ 500) | Mensagem offline |
+| `offline_send` | `uid`, `text` (≤ 500; base64 ≤ 800 com `e2ee: true`) | Mensagem offline (cifrada par-a-par quando `e2ee`) |
 | `complaint_add` | `id`, `text` | Registrar reclamação |
 | `complaint_list` | — | Listar reclamações (perm `banList`) |
 | `complaint_clear` | `uid?` | Limpar reclamações |
-| `whisper` | `ids` (array; vazio desativa) | Direcionar voz a usuários específicos. O servidor replica a chave vigente do canal do remetente para cada alvo via `channel_key` (também a cada rotação posterior, enquanto o sussurro estiver ativo), garantindo que o sussurro cross-canal seja decifrável. Reenvio idêntico é deduplicado. |
+| `whisper` | `ids` (array; vazio desativa) | Direcionar voz a usuários específicos. Alvos fora do componente do canal do remetente recebem a chave de grupo dele por envelope `e2e_key` enviado pelo **próprio remetente** (e re-enviado a cada rotação enquanto o sussurro estiver ativo), garantindo que o sussurro cross-canal seja decifrável. Reenvio idêntico é deduplicado. |
+| `e2e_key` (v6) | `to`, `enc` (base64 ≤ 4096) | Envelope de chave E2EE para outro cliente (X25519 efêmera + HKDF + AES-256-GCM; formato na seção E2EE v6). O servidor valida apenas `to`/tamanho e roteia opaco | 
+| `e2e_key_request` (v6) | `channel` (0 = escopo servidor) | Pedido de re-entrega da chave de grupo do canal ao componente; apenas membros do componente (canal 0 é de todos) | 
+| `identity_get` (v6) | `uid` | Pedir `idPub`/`dhPub`/`dhSig` de uma identidade (inclusive offline) ao registro do servidor |
 | `plugin_data` (v5) | `plugin`, `target` (0 canal/1 usuários/2 servidor), `ids?`, `topic`, `data` (base64) | Até 8 KiB; `pluginData` no canal ou `pluginDataGlobal` no servidor |
 | `ft_upload` | `channel`,`name`,`data` (base64 ≤ 1 MiB) | Enviar arquivo (máx. 50/canal, 10 MiB total) |
 | `ft_list` | `channel` | Listar arquivos do canal |
@@ -291,8 +368,10 @@ destino configurado.
 |---|---|---|
 | `pong` | `ts` | Resposta de latência |
 | `voice_token` | `udp`, `token` | Token/porta para voz |
-| `channel_key` | `channel`, `key` (base64, 32 B) | Chave de voz do canal |
-| `chat` | `scope`, `from`, `fromName?`, `text` | Chat retransmitido |
+| `e2e_key` (v6) | `to`, `enc` (base64), `from` | Envelope de chave E2EE roteado — bytes opacos ao servidor; `from` (id de sessão) é acrescentado pelo servidor e usado pelo destinatário para localizar o `dhPub` do remetente |
+| `e2e_key_request` (v6) | `channel`, `from`, `fromUid` | Repasse do pedido de re-entrega aos membros do componente (escopo servidor: todos) |
+| `identity_data` (v6) | `uid`, `idPub`, `dhPub`, `dhSig` (base64) | Diretório de identidades — resposta a `identity_get`; apenas chaves públicas |
+| `chat` | `scope`, `from`, `fromName?`, `text`, `e2ee?` | Chat retransmitido (com marcador opaco quando cifrado) |
 | `user_joined` | `user:{…}` | Cliente entrou |
 | `user_left` | `id`, `reason` (`quit`/`kicked`/`banned`/`dropped`) | Cliente saiu |
 | `user_moved` | `id`, `channel`, `by?` | Trocou de canal |
@@ -300,12 +379,12 @@ destino configurado.
 | `user_avatar` | `id`, `av` (sha-1) | Avatar mudou |
 | `avatar_data` | `uid`, `data` | Resposta a `avatar_get` |
 | `icon_data` | `name`, `data` | Resposta a `icon_get` |
-| `offline_msg` | `fromUid`,`fromName`,`text`,`ts` | Entregues no login (máx. 20/caixa) |
+| `offline_msg` | `fromUid`,`fromName`,`text`,`ts`,`e2ee?` | Entregues no login (máx. 20/caixa); com `e2ee`, o destinatário decifra com o par persistente usando o `fromUid` |
 | `offline_sent` | `uid` | Mensagem offline aceita |
 | `complaint_added` / `complaint_list` / `complaint_cleared` | — | Reclamações |
 | `chan_update` | `chan:{…}` | Canal criado/editado |
 | `chan_removed` | `id` | Canal removido |
-| `poke` | `from`, `fromName`, `msg`, `self?` | Você foi cutucado (o eco ao remetente vem com `self: true` — confirmação, não um poke recebido) |
+| `poke` | `from`, `fromName`, `msg`, `self?`, `e2ee?` | Você foi cutucado (o eco ao remetente vem com `self: true` — confirmação, não um poke recebido) |
 | `kicked` | `reason`, `ban`, `minutes?` | Expulso/banido (conexão encerra em seguida) |
 | `banlist` | `bans:[{uid,ip,name,reason,expires?}]` | Lista de banimentos |
 | `ban_removed` | `uid` | Banimento removido |
@@ -352,7 +431,8 @@ tópicos/estruturas versionados e manter os payloads pequenos.
 `no_talk_power`, `not_found`, `inbox_full`, `screenshare_disabled`,
 `screenshare_quality`, `webrtc_target`, `webrtc_channel`, `webrtc_not_streaming`,
 `plugin_data_unsupported`, `bad_plugin_data`, `plugin_data_too_big`,
-`plugin_data_scope`, `temporary_owner_limit`.
+`plugin_data_scope`, `temporary_owner_limit`, `bad_e2e_key`,
+`invalid_channel`.
 
 ## Voz (UDP)
 
@@ -528,7 +608,9 @@ protegidos. `chan_edit` fora dessa lista responde `temporary_owner_limit`.
 - **2 MiB** de teto por mensagem TCP (mensagens maiores derrubam a conexão).
 - Rate limit **por tipo de mensagem** (`server_probe`, `chat`, `move`,
   `status`, `ping`, `plugin_data`, `ft_*`…) com janelas por cliente/IP;
-  `talking` é isento.
+  `talking` é isento. Envelopes E2EE: `e2e_key` até 240 por 10 s (uma
+  rotação num canal de 32 usuários = 32 mensagens do mestre),
+  `e2e_key_request` 1 por 2 s, `identity_get` 30 por 10 s.
 - Limites por IP de conexões simultâneas e **timeout de ociosidade** TCP;
 - endpoints UDP ociosos são limpos periodicamente.
 - Validação estrita de tamanho/conteúdo para nick (≤ 30), chat, descrições,
@@ -582,14 +664,18 @@ tem prioridade. Se o INI não mudou, prevalece a última edição administrativa
 
 ## Compatibilidade e versionamento
 
-- `hello.proto`: 1..5 (`kProtoVersion = 5`, `kProtoMin = 1`). O v4 trocou o
-  token UDP sequencial de 32 bits por credencial CSPRNG de 128 bits e adotou
-  `HAL4`/`HAF4`; o v5 acrescenta `plugin_data` confiável e limitado. O servidor
-  mantém recepção de clientes anteriores dentro do intervalo anunciado.
+- `hello.proto`: **6** (`kProtoVersion = 6`, `kProtoMin = 6`). O servidor v6
+  recusa clientes v5 e anteriores — o E2EE exige o par X25519 e o binding
+  assinado já no `hello`. O v4 trocou o token UDP sequencial de 32 bits por
+  credencial CSPRNG de 128 bits e adotou `HAL4`/`HAF4`; o v5 acrescentou
+  `plugin_data` confiável e limitado; o v6 tornou toda a criptografia de
+  conteúdo ponta a ponta — chaves geradas e distribuídas pelos clientes,
+  `channel_key` extinto.
 - **TLS e identidade Ed25519 são incondicionais**: clientes antigos (sem TLS
   ou sem `idPub`) recebem erro/queda de conexão e devem atualizar.
-- Voz sem chave (texto puro) só é aceita transitoriamente quando o canal
-  ainda não distribuiu chaves; implementações novas devem exigir AEAD.
+- Clientes v6 **não transmitem voz sem chave de grupo vigente** — não há
+  fallback de texto puro; o antigo `channel_key` (chaves de canal geradas
+  pelo servidor) não existe mais no v6.
 
 ## Guia para implementações de terceiros
 
@@ -597,16 +683,26 @@ tem prioridade. Se o INI não mudou, prevalece a última edição administrativa
    fingerprint SHA-256 do certificado por `host:porta`.
 2. **Ed25519:** libsodium, OpenSSL EVP ou mbedTLS (Ed25519/EdDSA). Assine os
    **bytes crus do nonce**; envie a chave pública em DER (SubjectPublicKeyInfo).
-3. **AEAD:** ChaCha20-Poly1305 IETF. Construa o nonce exatamente como
+3. **AEAD de voz:** ChaCha20-Poly1305 IETF. Construa o nonce exatamente como
    especificado (little-endian) e nunca reutilize `(chave, nonce)`.
 4. **Replay (recomendado):** mantenha o maior `counter` visto por remetente e
    descarte pacotes com `counter` antigo (janela deslizante opcional).
-5. **Rotação de chaves:** trate `channel_key` como autoridade; descarte chaves
-   antigas do canal ao receber nova. Ao mover-se entre canais, aguarde a chave
-   do novo canal antes de transmitir.
-6. **Teste de conformidade:** o repositório inclui `halla-nettest` e os testes
+5. **E2EE (v6):** gere o par X25519 por sessão, assine `dhPub` com a Ed25519
+   (`"HALLA-DH-V1" ‖ dhPub`) e envie `dhPub`/`dhSig` no `hello`. Verifique o
+   `dhSig` dos demais pelo diretório (user objects/`identity_data`). Embrulhe
+   chaves de grupo com X25519 **efêmera** + HKDF-SHA256 + AES-256-GCM e
+   conteúdo par-a-par com derivação estático-estática — sempre com os
+   domínios de separação da seção E2EE v6.
+6. **Rotação de chaves:** a chave de grupo muda em join/leave/move/vínculo;
+   trate a **época** do envelope como autoridade e descarte chaves antigas.
+   Ao mover-se entre canais, aguarde a chave do novo canal antes de
+   transmitir (use `e2e_key_request` se o mestre não responder ao
+   `user_joined`).
+7. **Teste de conformidade:** o repositório inclui `halla-nettest` e os testes
    de integração. Para validar o transporte v5 após compilar:
-   `python3 tests/plugin_data_integration.py --server build/halla-server`.
+   `python3 tests/plugin_data_integration.py --server build/halla-server`;
+   para a camada E2EE v6: `python3 tests/e2ee_v6_integration.py --server
+   build/halla-server`.
 
 ---
 
@@ -620,5 +716,6 @@ tem prioridade. Se o INI não mudou, prevalece a última edição administrativa
 | v3.1 | ServerQuery na porta 10011 |
 | v4 | Token UDP CSPRNG de 128 bits, `HAL4`/`HAF4`, ICE/TURN distribuído pelo servidor e ServerQuery TLS |
 | v5 | Transporte TLS `plugin_data` para metadados binários entre complementos, com isolamento por canal, permissões, validação, limites e rate limit |
-| Segurança (obrigatória) | TLS + TOFU, identidade Ed25519 com desafio, chaves de canal de 32 B com rotação, ChaCha20-Poly1305 na voz e no screen share legado, limites/rate limit |
+| v6 | **E2EE real**: chaves de grupo geradas e distribuídas pelos clientes (envelopes `e2e_key` — X25519 efêmera + HKDF-SHA256 + AES-256-GCM), binding X25519↔Ed25519 validado no `hello` (`dhPub`/`dhSig`), chat/poke/offline cifrados par-a-par, diretório de identidades `identity_get`, verificação por SAS de 9 dígitos; `channel_key` extinto; `kProtoMin = 6` |
+| Segurança (obrigatória) | TLS + TOFU, identidade Ed25519 com desafio, voz e screen share legado em ChaCha20-Poly1305 com chaves de grupo dos clientes, limites/rate limit |
 | WebRTC | Sinalização de transmissão de tela via servidor, mídia P2P DTLS-SRTP |
